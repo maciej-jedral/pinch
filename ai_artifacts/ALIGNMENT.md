@@ -66,6 +66,8 @@ No Adminer/DB-UI service — everyone uses their own tooling (e.g. PhpStorm).
 
 `pinch-frontend` is deployed to Vercel's free **Hobby** plan. Backend deployment (AWS/Terraform) is still deferred — see below.
 
+**Status: live and verified 2026-09-12** at `pinch.vercel.app`; a push to `main` was confirmed to auto-deploy. Environment/workflow gotchas are in `WORKING_NOTES.md` next to this file.
+
 - **Scope**: frontend only. `page.tsx`'s existing try/catch already falls back to `"Hello from Next.js"` / database `"unreachable"` when `BACKEND_INTERNAL_URL` doesn't resolve (it won't, on Vercel) — this is expected, not a bug, until the backend has a public deployment.
 - **Mechanism**: Vercel's native GitHub integration (not GitHub Actions). Importing the repo once wires up: every push to `main` → production deploy, every PR → its own preview deployment. Zero pipeline config, no `vercel.json` needed — plain Next.js app, framework auto-detected.
 - **Vercel project name**: `pinch` (deliberately not `pinch-frontend`, so the default domain is `pinch.vercel.app`).
