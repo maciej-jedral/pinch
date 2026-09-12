@@ -22,4 +22,4 @@ This fetches the `backend`/`frontend` submodules, sets up local env files, build
 
 ## Plan
 
-See [`ALIGNMENT.md`](./ALIGNMENT.md) for the full project plan — what's decided, what's deliberately deferred to Phase 2 (domain, auth, API style, deployment/Terraform), and why.
+See [`ai_artifacts/ALIGNMENT.md`](ai_artifacts/ALIGNMENT.md) for the full project plan — what's decided, what's deliberately deferred to Phase 2 (domain, auth, API style, deployment/Terraform), and why.

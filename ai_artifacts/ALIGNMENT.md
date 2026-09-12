@@ -8,7 +8,7 @@ Four GitHub repos under `github.com/maciej-jedral`, all **public**, **MIT licens
 
 | Repo | Purpose | Status |
 |---|---|---|
-| `pinch` | Meta-repo: `docker-compose.yml`, `install.sh`, shared docs, submodule pointers. No app code. | Phase 1 |
+| `pinch` | Meta-repo: `../docker-compose.yml`, `install.sh`, shared docs, submodule pointers. No app code. | Phase 1 |
 | `pinch-backend` | Symfony backend | Phase 1 |
 | `pinch-frontend` | Next.js frontend | Phase 1 |
 | `pinch-terraform` | Infrastructure as code | **Deferred to Phase 2** — repo not created yet |

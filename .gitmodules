@@ -1,6 +1,8 @@
 [submodule "backend"]
 	path = backend
 	url = https://github.com/maciej-jedral/pinch-backend.git
+	ignore = all
 [submodule "frontend"]
 	path = frontend
 	url = https://github.com/maciej-jedral/pinch-frontend.git
+	ignore = all
