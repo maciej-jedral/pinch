@@ -62,15 +62,27 @@ No Adminer/DB-UI service — everyone uses their own tooling (e.g. PhpStorm).
 
 **CI**: GitHub Actions lint+test workflows are **Phase 2**, not Phase 1 — noted so it isn't forgotten, not because it's unimportant.
 
+## Frontend deployment (decided 2026-09-12)
+
+`pinch-frontend` is deployed to Vercel's free **Hobby** plan. Backend deployment (AWS/Terraform) is still deferred — see below.
+
+- **Scope**: frontend only. `page.tsx`'s existing try/catch already falls back to `"Hello from Next.js"` / database `"unreachable"` when `BACKEND_INTERNAL_URL` doesn't resolve (it won't, on Vercel) — this is expected, not a bug, until the backend has a public deployment.
+- **Mechanism**: Vercel's native GitHub integration (not GitHub Actions). Importing the repo once wires up: every push to `main` → production deploy, every PR → its own preview deployment. Zero pipeline config, no `vercel.json` needed — plain Next.js app, framework auto-detected.
+- **Vercel project name**: `pinch` (deliberately not `pinch-frontend`, so the default domain is `pinch.vercel.app`).
+- **Domain**: default `*.vercel.app` domain — no custom domain for now.
+- **Environment variables**: none set. `BACKEND_INTERNAL_URL` stays unset in the Vercel project until a real public backend URL exists.
+- **CI quality gate**: none added. Vercel's own `next build` (which typechecks) is the only gate on deploy; ESLint/Vitest are not run in CI. This stays consistent with the Phase 1 decision to defer GitHub Actions lint/test workflows to Phase 2 — not bolted on piecemeal here.
+- **Setup ownership**: connecting a GitHub repo to Vercel requires an interactive OAuth click-through in the browser (installing Vercel's GitHub App), which only the account owner can do — this was walked through manually, not automated.
+
 ## Explicitly deferred to Phase 2 (do not silently assume answers to these)
 
 - App domain/purpose — what Pinch actually does; whether it has user accounts
 - Frontend↔backend auth mechanism (JWT vs sessions vs third-party auth provider)
 - Symfony API style: plain Symfony vs API Platform
 - The real DDD layered architecture (`Domain/Application/Infrastructure/UI`) — Phase 1 uses a bare controller, no layering yet
-- Deployment: Vercel (frontend), AWS — Lightsail floated but not committed — Terraform for infra
+- Backend deployment: AWS — Lightsail floated but not committed — Terraform for infra
 - `pinch-terraform` repo creation
-- CI/CD pipelines (deploy workflows; lint/test workflows are Phase 1)
+- CI/CD pipelines: deploy workflows beyond Vercel's own, and lint/test workflows as merge gates (see Frontend deployment note above)
 
 ## Rejected/superseded options (recorded so they aren't re-litigated without reason)
 
