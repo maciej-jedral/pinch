@@ -14,6 +14,7 @@ Last updated 2026-09-14.
   installed, Neon Postgres, Budgets alert, S3 state. **No app deployed on it yet.** Decisions and
   next steps in `ALIGNMENT.md` → *Backend infrastructure*; how-to in `terraform/README.md`.
 - Four repos. `terraform/` is a submodule with **no standalone clone** (deliberately — see below).
+- Next phase (backend deploy) was grilled but not answered — **start from `NEXT_PHASE.md`**.
 - All repos clean and in sync at session end.
 
 ## Two clones of each app repo exist on disk — this WILL bite you
