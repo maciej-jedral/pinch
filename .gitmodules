@@ -6,3 +6,7 @@
 	path = frontend
 	url = https://github.com/maciej-jedral/pinch-frontend.git
 	ignore = all
+[submodule "terraform"]
+	path = terraform
+	url = https://github.com/maciej-jedral/pinch-terraform.git
+	ignore = all

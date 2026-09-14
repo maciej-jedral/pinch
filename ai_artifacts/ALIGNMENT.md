@@ -11,7 +11,7 @@ Four GitHub repos under `github.com/maciej-jedral`, all **public**, **MIT licens
 | `pinch` | Meta-repo: `../docker-compose.yml`, `install.sh`, shared docs, submodule pointers. No app code. | Phase 1 |
 | `pinch-backend` | Symfony backend | Phase 1 |
 | `pinch-frontend` | Next.js frontend | Phase 1 |
-| `pinch-terraform` | Infrastructure as code | **Deferred to Phase 2** — repo not created yet |
+| `pinch-terraform` | Infrastructure as code (Terraform, run via Docker) | Step 1 live since 2026-09-14 — see *Backend infrastructure* below |
 
 Repo creation: via `gh` CLI, authenticated by the user (`gh auth login`, interactive/device-code — cannot be automated).
 
@@ -76,6 +76,36 @@ No Adminer/DB-UI service — everyone uses their own tooling (e.g. PhpStorm).
 - **CI quality gate**: none added. Vercel's own `next build` (which typechecks) is the only gate on deploy; ESLint/Vitest are not run in CI. This stays consistent with the Phase 1 decision to defer GitHub Actions lint/test workflows to Phase 2 — not bolted on piecemeal here.
 - **Setup ownership**: connecting a GitHub repo to Vercel requires an interactive OAuth click-through in the browser (installing Vercel's GitHub App), which only the account owner can do — this was walked through manually, not automated.
 
+## Backend infrastructure (decided 2026-09-12, applied 2026-09-14)
+
+Grilling session 2026-09-12; built and verified 2026-09-14. Code lives in `pinch-terraform` (submodule `terraform/`); its `README.md` is the how-to. This section records the *why*.
+
+**Status: live.** `t4g.micro` at Elastic IP `63.182.98.240` (`http://63.182.98.240:8000` once the app is deployed), Neon project `small-bird-75248934` (PG 18.6, Frankfurt). Verified: SSH in, `docker compose version`, `hello-world`, and `psql` from the box to Neon returned `select 1`. **Nothing is deployed on the VM yet** — Docker is installed, that's all.
+
+- **Goal**: learn Terraform basics on a real AWS resource, at near-zero cost, in a way that *builds up* to EC2/VPC and later Fargate rather than being thrown away. This ruled out Lightsail (different resource family, no migration path) despite it being simplest.
+- **AWS account**: **new, Free plan** (created 2026-09-14). $100 credit + up to $100 earnable, 6-month window. AWS states the Free plan *cannot* charge the card; the account **auto-closes ~2027-03-14** or when credits hit zero, then 90 days grace, then permanent deletion. Never switch it to the Paid plan by accident — that's the only path to a bill. Expected burn ≈ $12/month (instance ~$7 + public IPv4 ~$3.65 + 8 GB gp3 ~$0.80) → ~$70 for the full 6 months.
+- **Compute: staged EC2**. Step 1 (done) = one `t4g.micro` (arm64, free-tier-eligible), Ubuntu 24.04 LTS, in the **default VPC**, security group 22+8000 in / all out, Elastic IP, cloud-init installs Docker + Compose from Docker's apt repo. Step 2 = own VPC/subnets/IGW, SSM Session Manager (drop port 22), IAM Identity Center, optionally RDS. Step 3 = ECS/Fargate task from the same image — **pending a check that ECS is on the Free plan's allowed-service list** (not verified yet).
+- **OS: Ubuntu 24.04 arm64** over Amazon Linux 2023 — AL2023 has no Compose plugin package (must curl the binary); Ubuntu gets `docker-ce` + `docker-compose-plugin` from Docker's official repo. Ubuntu 26.04 exists but was judged too fresh for Docker's repo.
+- **Database: Neon free tier**, Terraform-managed (`kislerdm/neon` provider, community but Neon-sponsored), region `aws-eu-central-1`, PG 18 (accepted by Neon's API). Chosen over Supabase (projects pause after 7 idle days; provider is alpha) and over RDS/Postgres-on-the-VM because the user wants **the data to outlive the Free-plan account**. Free tier: 0.5 GB, 100 CU-hours/month, scale-to-zero after 5 min (cold start ~0.5 s), 6 h PITR (`history_retention_seconds = 21600` — the provider default of 1 day is rejected on Free). Watch CU-hours the first month: a persistent Doctrine connection could keep the compute awake.
+- **Terraform tooling**: Terraform **1.16.2** via the `hashicorp/terraform` Docker image through `./tf` (nothing installed on the host, same rule as the app repos). Terraform over OpenTofu: BUSL is irrelevant to a personal learner and the docs/tutorials are Terraform-first. AWS provider `~> 6.64`, Neon `~> 0.18`, lock file committed.
+- **State: S3** bucket `pinch-tfstate-<account-id>` (versioned, SSE, public-access blocked, `prevent_destroy`), created by a separate `bootstrap/` module with local state; root uses `use_lockfile = true` (native S3 locking, no DynamoDB). Bucket name lives in gitignored `backend.hcl`. Known caveat: the bucket dies with the account — migration to the next account is `terraform init -migrate-state`; keep a local copy of the state before ~2027-03.
+- **AWS auth**: IAM user `terraform` with the scoped policy in `iam/terraform-user-policy.json` (EC2 `*`, S3 on `pinch-tfstate-*`, Budgets `*`, `sts:GetCallerIdentity`), long-lived keys in `~/.aws/credentials`, mounted read-only into the Terraform container. Root user: MFA, no keys. Identity Center is a Step 2 item.
+- **SSH**: dedicated `ed25519` key `~/.ssh/pinch-aws`, public half in tfvars → `aws_key_pair`. Port 22 open to `0.0.0.0/0` (key-only auth; home IP changes). Terraform-generated keys (`tls_private_key`) rejected — private key would sit in state.
+- **Cost guard**: `aws_budgets_budget` $15/month **gross** (`include_credit = false`, otherwise it reads $0 on the Free plan), email at 100% actual and 133% forecast (~$20) → `maciej.jedral90@gmail.com`. Also earns Free-plan "Explore AWS" credit. Instance runs 24/7 — no destroy-between-sessions dance.
+- **Backend URL: plain HTTP on the EIP** for now. `page.tsx` fetches server-side so no browser ever sees it; TLS needs a hostname (see next steps).
+- **Public repo hygiene**: budget email, Neon org ID, AWS account ID, SSH public key, Neon API key are all in gitignored files (`terraform.tfvars`, `backend.hcl`, `.env`) with committed `.example` twins.
+
+### Next steps (in rough order)
+
+1. **Confirm the AWS Budgets subscription email** (arrives after first apply; alerts don't fire until clicked).
+2. **Delete the auto-created Neon project** `tiny-boat-47874989` (Neon's onboarding wizard made it; Terraform's is `small-bird-75248934`). Harmless but noise.
+3. **App deploy**: prod-ready `backend/Dockerfile` (no bind mount, `APP_ENV=prod`), image built for `linux/arm64` and pushed to **GHCR** (free for public repos) by GitHub Actions, a one-service `compose.prod.yml` on the VM (`restart: unless-stopped`, port 8000, `.env` with `DATABASE_URL` = Neon URI + `APP_SECRET`). Deploy = `docker compose pull && up -d` over SSH from Actions. Where `compose.prod.yml` lives (backend repo, leaning yes) is a decision for that step.
+4. **Vercel**: set `BACKEND_INTERNAL_URL=http://63.182.98.240:8000` on the `pinch` project once the app answers — the homepage's "unreachable" fallback goes away.
+5. **TLS + domain** (deferred from this step on purpose): sslip.io + Caddy auto-TLS is flaky (Let's Encrypt rate limits on shared domains); a real domain (~$10/yr) + Route 53 zone ($0.50/mo credits) + FrankenPHP/Caddy auto-TLS is the clean path. Decide together with whether the same domain fronts Vercel.
+6. **Step 2 infra**: own VPC, SSM Session Manager (close port 22), IAM Identity Center; RDS only if credits allow and there's a learning reason.
+7. **Step 3 infra**: Fargate — after verifying ECS is on the Free plan.
+8. **Before ~2027-03-14**: decide upgrade-to-Paid (~$12/mo) vs. let the account close and rebuild on a fresh one; back up state first.
+
 ## Known tech debt (not deferred decisions — things to revisit and fix)
 
 - **`pinch-frontend` uses two different bundlers**: local dev runs `next dev --webpack` (Turbopack's watcher doesn't reliably detect file changes across the Docker bind mount from the host), while the Vercel production build uses Turbopack (Next 16's default — no bind mount involved there, so it works fine). `next.config.ts` has both a `webpack()` override (dev watch polling only, no loaders/transforms) and an empty `turbopack: {}` to make the split explicit. Low risk today since the webpack config doesn't touch actual code transforms, but if a real webpack customization (loader, alias, etc.) is ever added, it must be mirrored into the `turbopack` config too or dev/prod will silently diverge. Revisit once Turbopack's dev-mode file watching over bind mounts improves, or once the project drops Docker-bind-mount dev entirely.
@@ -86,9 +116,9 @@ No Adminer/DB-UI service — everyone uses their own tooling (e.g. PhpStorm).
 - Frontend↔backend auth mechanism (JWT vs sessions vs third-party auth provider)
 - Symfony API style: plain Symfony vs API Platform
 - The real DDD layered architecture (`Domain/Application/Infrastructure/UI`) — Phase 1 uses a bare controller, no layering yet
-- Backend deployment: AWS — Lightsail floated but not committed — Terraform for infra
-- `pinch-terraform` repo creation
-- CI/CD pipelines: deploy workflows beyond Vercel's own, and lint/test workflows as merge gates (see Frontend deployment note above)
+- ~~Backend deployment: AWS — Lightsail floated but not committed — Terraform for infra~~ → decided, see *Backend infrastructure*
+- ~~`pinch-terraform` repo creation~~ → done 2026-09-14
+- CI/CD pipelines: deploy workflows beyond Vercel's own, and lint/test workflows as merge gates (see Frontend deployment note above); backend deploy pipeline is *Next steps* item 3 under *Backend infrastructure*
 
 ## Rejected/superseded options (recorded so they aren't re-litigated without reason)
 
@@ -96,4 +126,9 @@ No Adminer/DB-UI service — everyone uses their own tooling (e.g. PhpStorm).
 - API Platform for the backend — rejected in favor of plain Symfony, since API Platform's "resource = entity" shortcut fights the planned DDD layering
 - pnpm + Turborepo — rejected; only one JS package exists (`pinch-frontend`), so plain npm is sufficient until a second JS package appears
 - Session-cookie auth — deferred alongside the rest of Phase 2's auth decision, JWT is the current leaning but not committed
+- Lightsail for the backend — rejected 2026-09-12: no upgrade path to EC2/VPC/Fargate, and on a Free-plan account it burns the same credits as EC2
+- Supabase, RDS, Postgres-on-the-VM — rejected in favour of Neon (see *Backend infrastructure*)
+- Amazon Linux 2023 — rejected in favour of Ubuntu 24.04 (no Compose plugin package)
+- OpenTofu — not chosen; Terraform proper, since tutorials/docs target it and the licence doesn't affect a personal learner
+- Terraform-generated SSH key (`tls_private_key`) — rejected; private key would live in state
 - `dunglas/symfony-docker` starter kit as the backend base — declined in favor of a minimal hand-rolled Dockerfile, to avoid pulling in pre-wired Xdebug/Dev Container tooling not currently wanted

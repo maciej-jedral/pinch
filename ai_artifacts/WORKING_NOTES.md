@@ -2,16 +2,19 @@
 
 Environment facts and workflow gotchas learned in practice. Not decisions (those live in
 `ALIGNMENT.md`) — this is "how to actually get things done on this machine without tripping".
-Last updated 2026-09-12.
+Last updated 2026-09-14.
 
-## Current state (as of 2026-09-12)
+## Current state (as of 2026-09-14)
 
 - Phase 1 complete: `docker compose up` runs Postgres + Symfony (FrankenPHP) + Next.js locally,
   homepage fetches `/api/hello` end-to-end. `./install.sh` verified from a fresh clone.
 - Frontend is **live on Vercel** at `pinch.vercel.app` (Hobby plan, project name `pinch`).
   Pipeline verified: push to `main` on `pinch-frontend` → auto production deploy. PRs get preview URLs.
-- Backend is local-only. No AWS/Terraform yet. `pinch-terraform` repo not created.
-- All three repos clean and in sync at session end.
+- Backend infra **Step 1 is live** (2026-09-14): EC2 `t4g.micro` at `63.182.98.240` with Docker
+  installed, Neon Postgres, Budgets alert, S3 state. **No app deployed on it yet.** Decisions and
+  next steps in `ALIGNMENT.md` → *Backend infrastructure*; how-to in `terraform/README.md`.
+- Four repos. `terraform/` is a submodule with **no standalone clone** (deliberately — see below).
+- All repos clean and in sync at session end.
 
 ## Two clones of each app repo exist on disk — this WILL bite you
 
@@ -28,6 +31,7 @@ Last updated 2026-09-12.
 - After pushing from a submodule, `git pull` in the standalone clone to keep them identical,
   otherwise the next session finds a confusing "modified but identical" diff.
 - Consider deleting the standalone clones in a future session to remove the footgun — ask first.
+- `pinch/terraform` has **no** standalone twin. Edit and commit it in place; step 3 below doesn't apply.
 
 ## Submodule change workflow (do all three steps every time)
 
@@ -42,10 +46,36 @@ then checks out old code.
 
 - **No global git identity** on this machine, and it must not be set globally (user instruction).
 - Each repo/checkout has **local** `user.name "Maciej Jedral"` / `user.email maciej.jedral90@gmail.com`.
-  Already set in: `pinch`, `pinch-frontend`, `pinch-backend`, `pinch/frontend`, `pinch/backend`.
+  Already set in: `pinch`, `pinch-frontend`, `pinch-backend`, `pinch/frontend`, `pinch/backend`, `pinch/terraform`.
 - A fresh submodule checkout (e.g. after re-clone) will fail with "Author identity unknown" —
   set it locally again, never `--global`.
 - Commits end with the `Co-Authored-By` + `Claude-Session` trailers.
+
+## AWS / Terraform (added 2026-09-14)
+
+- **Everything goes through `terraform/tf`** (Terraform 1.16.2 in Docker). `./tf -chdir=bootstrap …`
+  for the state-bucket module. No `terraform`/`aws` binaries on the host. For ad-hoc AWS CLI calls:
+  `docker run --rm -v ~/.aws:/root/.aws:ro -e AWS_REGION=eu-central-1 public.ecr.aws/aws-cli/aws-cli:latest <cmd>`.
+- Creds: `~/.aws/credentials` (IAM user `terraform`, `[default]` profile), region in `~/.aws/config`.
+  Neon API key in `terraform/.env`. All gitignored — never print them; mask account ids in output
+  (`sed -E 's/[0-9]{12}/<account-id>/g'`) since the repos are public.
+- Local-only files in `terraform/`: `terraform.tfvars`, `backend.hcl`, `.env`, `bootstrap/terraform.tfstate`.
+  If any is missing, recreate from the `.example` twin; bucket name = `./tf -chdir=bootstrap output -raw state_bucket_name`.
+- SSH: `ssh -i ~/.ssh/pinch-aws ubuntu@$(cd terraform && ./tf output -raw backend_public_ip)`.
+  Right after first boot, `sudo cloud-init status --wait` before touching Docker. A session opened
+  *before* cloud-init finished won't have the `docker` group — reconnect.
+- `./tf output` values contain `\r` when captured from the Docker TTY — pipe through `tr -d '\r'`.
+- Changing `cloud-init.yaml` makes Terraform **replace the instance** (user-data is immutable). Fine
+  now (nothing on the box), dangerous once the app is deployed — plan accordingly.
+- AWS account is **Free plan** (new 2026-09-14): cannot bill the card, closes ~2027-03-14 or when the
+  ~$100–200 credits run out. Don't upgrade it to Paid. Budget alert tracks gross usage.
+- Neon: org `org-crimson-haze-69015012`, Terraform project `small-bird-75248934` (PG 18, Frankfurt).
+  Onboarding auto-created `tiny-boat-47874989` — not Terraform-managed, slated for deletion.
+  Org id / projects are queryable: `curl -H "Authorization: Bearer $NEON_API_KEY" https://console.neon.tech/api/v2/users/me/organizations`.
+- Neon's console pushes `npm i -g neon`, `neon link`, `neon deploy`, MCP setup etc. — ignore all of it;
+  Terraform talks to the API directly.
+- The Claude Code auto-mode classifier **refuses to create public GitHub repos** (`gh repo create --public`).
+  The user runs that one command via `! gh repo create …`; everything after (push, submodule add) is fine.
 
 ## Docker on this machine
 
@@ -57,6 +87,7 @@ then checks out old code.
   - `docker compose exec frontend npm run build|lint|test|typecheck`
   - `docker compose exec backend composer stan|cs-check|test`
 - Containers: `pinch-database-1`, `pinch-backend-1`, `pinch-frontend-1`. Ports 8000 (backend), 3000 (frontend).
+- Docker Desktop goes to sleep between sessions; the `systemctl --user start docker-desktop` dance was needed twice in one day.
 - The frontend dev server auto-restarts when `next.config.ts` changes; source edits hot-reload
   within ~6s via webpack polling (see bundler note below).
 
