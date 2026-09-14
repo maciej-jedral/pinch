@@ -5,18 +5,69 @@ Handoff written 2026-09-14 at the end of the infra Step 1 session. A grilling ro
 fresh session. Start by re-reading `ALIGNMENT.md` (→ *Backend infrastructure*) and `WORKING_NOTES.md`,
 then re-present the questions below (re-verify facts marked ⚠ first — they can go stale).
 
-## Goal of the phase
+## ⚠ NOTHING BELOW IS DECIDED — the user wants to explore the whole setup
 
-`pinch.vercel.app` shows `database: connected` from the real backend, and every push to
-`pinch-backend/main` redeploys it. Concretely:
+The previous session's Round 1 (table further down) **assumed GitHub Actions + GHCR** as the pipeline
+and registry. That was an unexamined carry-over from the Step 1 discussion, not a decision, and the
+user explicitly asked that it be treated as **open**. In particular they want to look at the
+**AWS-native option (CodePipeline / CodeBuild / CodeDeploy + ECR)** before choosing. Start the
+grilling from **Round 0** below; the Round 1 table is only valid if Round 0 lands on GitHub.
 
-1. production-grade image build (`target: prod`),
-2. pushed to GHCR,
-3. one-service Compose file on the VM under `/opt/pinch`, secrets in a `.env` there,
-4. GitHub Actions: check → build+push → ssh → `compose pull && up -d` (+ migrations),
+## Goal of the phase (platform-agnostic)
+
+`pinch.vercel.app` shows `database: connected` from the real backend, and a push to
+`pinch-backend/main` redeploys it without manual steps. Somewhere there has to be:
+
+1. a production-grade image build,
+2. a registry the VM can pull from,
+3. a runtime definition on the VM (Compose, or whatever the platform dictates) with secrets delivered somehow,
+4. a pipeline: quality checks → build+push → put the new version on the VM (+ migrations),
 5. `BACKEND_INTERNAL_URL=http://63.182.98.240:8000` on the Vercel `pinch` project.
 
-Terraform changes only if a separate deploy key is added to the VM (see Q7).
+Terraform changes depend on the platform choice: an AWS-native pipeline is itself infrastructure
+(pipeline, build project, IAM roles, ECR repo, instance role for CodeDeploy/ECR pull) and would be
+a substantial addition to `pinch-terraform`; the GitHub path needs at most a deploy key on the VM.
+
+## Round 0 — platform & registry (ask FIRST; everything else hangs off it)
+
+**Q0.1 – CI/CD platform.** Options the user wants compared honestly, with credit cost on the Free-plan
+account and the learning value of each:
+
+- **(a) GitHub Actions** — free for public repos, native arm64 runners, zero AWS resources, secrets in
+  GitHub. Teaches: nothing AWS-specific. Deploy step = SSH into the VM.
+- **(b) AWS-native: CodePipeline + CodeBuild (+ CodeDeploy or SSM Run Command)** — the pipeline becomes
+  Terraform-managed AWS infra (good Terraform practice: IAM roles/policies, CodeStar/GitHub connection,
+  S3 artifact bucket, ECR). Teaches a lot of AWS IAM. ⚠ Facts to verify before presenting:
+  whether CodePipeline/CodeBuild/CodeDeploy are on the **Free plan's allowed-service list**; CodePipeline
+  V2 per-action-minute pricing vs V1 $1/pipeline/month; CodeBuild free tier (100 build-min/month on
+  small instances) and arm64 build support; whether a GitHub → CodePipeline source connection needs a
+  manual OAuth click-through (it does for CodeStar Connections — user does it in console).
+- **(c) Hybrid** — GitHub Actions for checks + build (free, fast), AWS only for the deploy step
+  (e.g. SSM Run Command via OIDC-federated role, no SSH key at all). Teaches OIDC + IAM without paying
+  for CodePipeline.
+- **(d) Nothing** — manual `docker compose pull && up -d` over SSH for now, pipeline as its own later phase.
+
+**Q0.2 – Container registry.** (a) **GHCR** — free, public package, no AWS resources, VM pulls
+anonymously (after a one-time visibility flip). (b) **ECR private** — Terraform-managed, needs an
+instance IAM role (or `aws ecr get-login-password` with the terraform user's keys — bad) for the VM to
+pull; ⚠ verify free-tier storage on the Free plan (legacy was 500 MB/month for 12 months; new plan =
+credits) and whether ECR is on the Free plan's allowed-service list. (c) **ECR Public** — 50 GB always
+free, anonymous pulls, but repos live in `us-east-1` only. Note: a CodeBuild pipeline can push to GHCR
+and Actions can push to ECR — registry and pipeline are independent choices.
+
+**Q0.3 – How the new version reaches the VM** (depends on Q0.1): SSH from the pipeline (needs a key on
+the VM); **SSM Run Command / Session** (needs the Step 2 instance role + SSM agent, which Ubuntu has —
+this would pull part of Step 2 forward); **CodeDeploy agent** on the VM (its own install + IAM role +
+appspec); or the VM **polls** the registry (e.g. Watchtower — simple, but no ordering/migrations).
+
+**Q0.4 – Does the user want this phase to also be the "IAM roles + OIDC" lesson?** Both (b) and (c)
+force it; (a) avoids it. Their Step 1 preference was "learn Terraform basics first, then more AWS";
+this phase can go either way — put it to them.
+
+Facts already known that constrain Round 0: VM has no IAM instance role yet (Step 2 item);
+`iam/terraform-user-policy.json` covers only EC2/S3-state/Budgets — any AWS-native option widens it
+(IAM, CodePipeline, CodeBuild, ECR, SSM…); the Free plan blocks some services outright (list only
+visible in the console — ask the user to check ECS/CodeBuild/CodePipeline/ECR there).
 
 ## Facts already established (don't re-ask the user)
 
@@ -35,7 +86,7 @@ Terraform changes only if a separate deploy key is added to the VM (see Q7).
 - **Frontend**: `src/lib/hello.ts` reads `BACKEND_INTERNAL_URL` server-side with `cache: "no-store"`;
   `src/app/page.tsx` falls back to "unreachable". Plain HTTP on the EIP works with **zero frontend code
   change**. No `vercel.json` → Vercel functions run in `iad1` (US East); `fra1` would match EC2 + Neon.
-- **No CI in `pinch-backend`** (no `.github/`). Repo is public → GHCR is free; Actions pushes with
+- **No CI in `pinch-backend`** (no `.github/`). Repo is public → GHCR is free *if chosen*; Actions could push with
   `GITHUB_TOKEN` (`packages: write`). ⚠ **First GHCR push creates the package as *private*** even for a public
   repo — needs one manual visibility flip (GitHub → package → settings) or a pull token on the VM.
 - ⚠ GitHub provides **free native arm64 hosted runners for public repos** (`runs-on: ubuntu-24.04-arm`) —
@@ -53,7 +104,7 @@ Terraform changes only if a separate deploy key is added to the VM (see Q7).
   debt in `ALIGNMENT.md`.
 - Local stack was left running (`docker compose up -d` in `pinch/`) at session end.
 
-## Round 1 questions (asked, NOT yet answered) — with the recommendations given
+## Round 1 questions — ONLY IF Round 0 = GitHub Actions + GHCR (asked once, not answered, recommendations were the previous session's)
 
 | # | Decision | Options | Recommended |
 |---|---|---|---|
@@ -68,7 +119,7 @@ Terraform changes only if a separate deploy key is added to the VM (see Q7).
 | Q9 | Migrations on deploy | (a) `doctrine:migrations:migrate --no-interaction` via `compose run --rm` before `up -d`; (b) manual until an entity exists | **(a)** |
 | Q10 | Vercel region | (a) `vercel.json` `{"regions":["fra1"]}` in `pinch-frontend`; (b) leave `iad1` | **(a)** |
 
-## Round 2 (planned, depends on Round 1)
+## Round 2 topics (platform-independent, after Round 0/1)
 
 - Exact prod `DATABASE_URL`: Neon direct vs pooler endpoint; `serverVersion`/`charset` params.
 - `CORS_ALLOW_ORIGIN` value (`^https://pinch\.vercel\.app$`? — not strictly needed for server-side fetch).
