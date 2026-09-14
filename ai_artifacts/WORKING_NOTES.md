@@ -70,8 +70,9 @@ then checks out old code.
 - AWS account is **Free plan** (new 2026-09-14): cannot bill the card, closes ~2027-03-14 or when the
   ~$100–200 credits run out. Don't upgrade it to Paid. Budget alert tracks gross usage.
 - Neon: org `org-crimson-haze-69015012`, Terraform project `small-bird-75248934` (PG 18, Frankfurt).
-  Onboarding auto-created `tiny-boat-47874989` — not Terraform-managed, slated for deletion.
+  (Onboarding had auto-created `tiny-boat-47874989`; deleted via API 2026-09-14.)
   Org id / projects are queryable: `curl -H "Authorization: Bearer $NEON_API_KEY" https://console.neon.tech/api/v2/users/me/organizations`.
+- Budgets API lives in `us-east-1` only: `-e AWS_REGION=us-east-1 … budgets describe-budget --account-id <id> --budget-name pinch-monthly`.
 - Neon's console pushes `npm i -g neon`, `neon link`, `neon deploy`, MCP setup etc. — ignore all of it;
   Terraform talks to the API directly.
 - The Claude Code auto-mode classifier **refuses to create public GitHub repos** (`gh repo create --public`).
