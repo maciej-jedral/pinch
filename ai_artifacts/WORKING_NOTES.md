@@ -2,20 +2,22 @@
 
 Environment facts and workflow gotchas learned in practice. Not decisions (those live in
 `ALIGNMENT.md`) — this is "how to actually get things done on this machine without tripping".
-Last updated 2026-09-14.
+Last updated 2026-09-15.
 
-## Current state (as of 2026-09-14)
+## Current state (as of 2026-09-15)
 
 - Phase 1 complete: `docker compose up` runs Postgres + Symfony (FrankenPHP) + Next.js locally,
   homepage fetches `/api/hello` end-to-end. `./install.sh` verified from a fresh clone.
-- Frontend is **live on Vercel** at `pinch.vercel.app` (Hobby plan, project name `pinch`).
-  Pipeline verified: push to `main` on `pinch-frontend` → auto production deploy. PRs get preview URLs.
-- Backend infra **Step 1 is live** (2026-09-14): EC2 `t4g.micro` at `63.182.98.240` with Docker
-  installed, Neon Postgres, Budgets alert, S3 state. **No app deployed on it yet.** Decisions and
-  next steps in `ALIGNMENT.md` → *Backend infrastructure*; how-to in `terraform/README.md`.
+- Frontend is **live on Vercel** at `https://pinch-frontend-eight.vercel.app` (Hobby plan).
+  **Not** `pinch.vercel.app` — that's an unrelated third-party site; earlier notes had it wrong.
+  Push to `main` on `pinch-frontend` → auto production deploy. PRs get preview URLs. Functions pinned to `fra1`.
+- Backend infra **Step 1 is live** (2026-09-14): EC2 `t4g.micro` at `63.182.98.240`, Neon Postgres,
+  Budgets alert, S3 state. Decisions in `ALIGNMENT.md` → *Backend infrastructure*; how-to in `terraform/README.md`.
+- Backend **deploy pipeline is live** (2026-09-15): push to `pinch-backend/main` → GitHub Actions
+  check → build (GHCR) → SSH deploy to the box. Decisions in `ALIGNMENT.md` → *Backend deployment*;
+  ops how-to in the section below.
 - Four repos. `terraform/` is a submodule with **no standalone clone** (deliberately — see below).
-- Next phase (backend deploy) was grilled but not answered — **start from `NEXT_PHASE.md`**.
-- All repos clean and in sync at session end.
+- Next: TLS + domain (needs its own grilling), then Step 2 infra. See ALIGNMENT next steps.
 
 ## Two clones of each app repo exist on disk — this WILL bite you
 
@@ -66,8 +68,13 @@ then checks out old code.
   Right after first boot, `sudo cloud-init status --wait` before touching Docker. A session opened
   *before* cloud-init finished won't have the `docker` group — reconnect.
 - `./tf output` values contain `\r` when captured from the Docker TTY — pipe through `tr -d '\r'`.
-- Changing `cloud-init.yaml` makes Terraform **replace the instance** (user-data is immutable). Fine
-  now (nothing on the box), dangerous once the app is deployed — plan accordingly.
+- Changing `cloud-init.yaml.tftpl` (or `deploy_ssh_public_key`) makes Terraform **replace the instance**
+  (`user_data_replace_on_change = true` — without it the provider would update in place and cloud-init
+  would silently *not* re-run). EIP survives, the app doesn't: afterwards update `KNOWN_HOSTS` in the
+  GitHub `production` environment and re-run the latest `pinch-backend` workflow. Also run
+  `ssh-keygen -R 63.182.98.240` locally.
+- The auto-mode classifier refuses `./tf apply -auto-approve` ("blind apply"). Use
+  `./tf plan -out=x.tfplan` then `./tf apply x.tfplan` (`*.tfplan` is gitignored).
 - AWS account is **Free plan** (new 2026-09-14): cannot bill the card, closes ~2027-03-14 or when the
   ~$100–200 credits run out. Don't upgrade it to Paid. Budget alert tracks gross usage.
 - Neon: org `org-crimson-haze-69015012`, Terraform project `small-bird-75248934` (PG 18, Frankfurt).
@@ -78,6 +85,32 @@ then checks out old code.
   Terraform talks to the API directly.
 - The Claude Code auto-mode classifier **refuses to create public GitHub repos** (`gh repo create --public`).
   The user runs that one command via `! gh repo create …`; everything after (push, submodule add) is fine.
+
+## Backend deploy ops (added 2026-09-15)
+
+- **Where things are**: workflow `pinch-backend/.github/workflows/deploy.yml`; on the VM `/opt/pinch/{compose.yml,.env}`
+  (both rewritten on every deploy — edits there don't survive). Image `ghcr.io/maciej-jedral/pinch-backend:sha-<full commit sha>`.
+- **What's live**: `ssh -i ~/.ssh/pinch-aws ubuntu@63.182.98.240 'grep BACKEND_IMAGE_TAG /opt/pinch/.env; docker compose -f /opt/pinch/compose.yml ps'`.
+- **Logs**: `… 'docker compose -f /opt/pinch/compose.yml logs --tail 100 -f'`.
+- **Redeploy / rollback**: `gh run list --repo maciej-jedral/pinch-backend`, then `gh run rerun <id> --repo …`
+  (or Actions UI → *Re-run all jobs*). Re-running an older run deploys that commit's sha. Only `main` may
+  deploy to the `production` environment (deployment-branch policy).
+- **Secrets/variables** (GitHub `production` environment, all set via `gh secret set … --env production`):
+  `APP_SECRET`, `DATABASE_URL` (Neon direct URI, `postgres://…/neondb?sslmode=require` — Doctrine accepts the
+  `postgres` scheme), `DEPLOY_SSH_KEY` (private half of `~/.ssh/pinch-deploy`); variables `BACKEND_HOST`,
+  `KNOWN_HOSTS` (`ssh-keyscan -t ed25519 63.182.98.240`). `CORS_ALLOW_ORIGIN` and `DEFAULT_URI` are hardcoded in the workflow.
+  The canonical `APP_SECRET` copy is in the user's password manager; GitHub never shows it again.
+- **Rotate the deploy key**: `ssh-keygen -t ed25519 -f ~/.ssh/pinch-deploy` → new pub into `terraform.tfvars`
+  → `./tf plan/apply` (replaces the instance, see AWS section) → `gh secret set DEPLOY_SSH_KEY --env production < ~/.ssh/pinch-deploy`
+  → update `KNOWN_HOSTS` → re-run the workflow.
+- **GHCR**: the deploy job logs in with the ephemeral job token before `pull` and logs out after, so it works
+  even while the package is private. Flip the package public (GitHub → Packages → pinch-backend → settings)
+  if you want anonymous `docker pull` from anywhere.
+- **Migrations** run on every deploy (`--allow-no-migration` while `migrations/` is empty). The build stage
+  runs `composer dump-env prod`, so the image carries a compiled `.env.local.php`; real env vars still win.
+- **Test DB**: `composer test` = `doctrine:database:create --env=test --if-not-exists` + phpunit. The root
+  compose no longer passes `env_file` to `backend` (Symfony reads `/app/.env*` itself); the container has no
+  `APP_ENV` env var, which is what lets phpunit force `test`.
 
 ## Docker on this machine
 
@@ -106,9 +139,10 @@ then checks out old code.
 
 ## Vercel
 
-- Project `pinch` ← GitHub `maciej-jedral/pinch-frontend`, root dir `./`, framework auto-detected, no env vars.
-- No `vercel.json`, no GitHub Actions. Deploy trigger is Vercel's GitHub App.
-- The live page shows the "unreachable" database fallback by design — there's no public backend yet.
+- Vercel project ← GitHub `maciej-jedral/pinch-frontend`, root dir `./`, framework auto-detected. Domain
+  `pinch-frontend-eight.vercel.app`.
+- `vercel.json` pins `regions: ["fra1"]`. No GitHub Actions. Deploy trigger is Vercel's GitHub App.
+- Env var `BACKEND_INTERNAL_URL=http://63.182.98.240:8000` (set 2026-09-15 by the user in the dashboard).
 - Anything needing the Vercel dashboard/OAuth must be done by the user; give them steps.
 
 ## User preferences observed

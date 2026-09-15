@@ -16,11 +16,12 @@ services:
       - database_data:/var/lib/postgresql
 
   backend:
-    build: ./backend
-    env_file:
-      - ./backend/.env
-      - path: ./backend/.env.local
-        required: false
+    build:
+      context: ./backend
+      target: dev
+    # No env_file here on purpose: Symfony's Dotenv reads /app/.env* through the
+    # bind mount. Injecting them as real env vars made APP_ENV=dev override the
+    # test env forced by phpunit.dist.xml.
     ports:
       - "8000:8000"
     depends_on:

@@ -64,15 +64,15 @@ No Adminer/DB-UI service — everyone uses their own tooling (e.g. PhpStorm).
 
 ## Frontend deployment (decided 2026-09-12)
 
-`pinch-frontend` is deployed to Vercel's free **Hobby** plan. Backend deployment (AWS/Terraform) is still deferred — see below.
+`pinch-frontend` is deployed to Vercel's free **Hobby** plan. Backend deployment is covered by *Backend infrastructure* and *Backend deployment* below.
 
-**Status: live and verified 2026-09-12** at `pinch.vercel.app`; a push to `main` was confirmed to auto-deploy. Environment/workflow gotchas are in `WORKING_NOTES.md` next to this file.
+**Status: live and verified 2026-09-12** at `https://pinch-frontend-eight.vercel.app` (corrected 2026-09-15 — earlier notes said `pinch.vercel.app`, which is an unrelated third-party site); a push to `main` was confirmed to auto-deploy. Environment/workflow gotchas are in `WORKING_NOTES.md` next to this file.
 
 - **Scope**: frontend only. `page.tsx`'s existing try/catch already falls back to `"Hello from Next.js"` / database `"unreachable"` when `BACKEND_INTERNAL_URL` doesn't resolve (it won't, on Vercel) — this is expected, not a bug, until the backend has a public deployment.
 - **Mechanism**: Vercel's native GitHub integration (not GitHub Actions). Importing the repo once wires up: every push to `main` → production deploy, every PR → its own preview deployment. Zero pipeline config, no `vercel.json` needed — plain Next.js app, framework auto-detected.
-- **Vercel project name**: `pinch` (deliberately not `pinch-frontend`, so the default domain is `pinch.vercel.app`).
-- **Domain**: default `*.vercel.app` domain — no custom domain for now.
-- **Environment variables**: none set. `BACKEND_INTERNAL_URL` stays unset in the Vercel project until a real public backend URL exists.
+- **Vercel domain**: Vercel's generated `pinch-frontend-eight.vercel.app` (the `pinch` name was taken). Default `*.vercel.app` domain — no custom domain for now.
+- **Environment variables**: `BACKEND_INTERNAL_URL` is set as part of the backend deploy phase (see *Backend deployment*); until then the homepage shows the "unreachable" fallback.
+- **Function region**: `vercel.json` pins `fra1` (decided 2026-09-15) so the server-side fetch to the Frankfurt EC2 box doesn't cross the Atlantic.
 - **CI quality gate**: none added. Vercel's own `next build` (which typechecks) is the only gate on deploy; ESLint/Vitest are not run in CI. This stays consistent with the Phase 1 decision to defer GitHub Actions lint/test workflows to Phase 2 — not bolted on piecemeal here.
 - **Setup ownership**: connecting a GitHub repo to Vercel requires an interactive OAuth click-through in the browser (installing Vercel's GitHub App), which only the account owner can do — this was walked through manually, not automated.
 
@@ -99,16 +99,41 @@ Grilling session 2026-09-12; built and verified 2026-09-14. Code lives in `pinch
 
 1. ~~Budget email confirmation~~ — not needed: direct email subscribers on a Budget need no confirmation (only SNS topics do). Verified via API 2026-09-14: both notifications `OK`. (What the console shows under *Cost monitors* is Cost Anomaly Detection's default monitor, a different, always-on feature.)
 2. ~~Delete the auto-created Neon project~~ — done 2026-09-14 via API; only `small-bird-75248934` remains.
-3. **App deploy** — **platform and registry are OPEN questions**; the user wants to compare GitHub Actions + GHCR against AWS-native (CodePipeline/CodeBuild/CodeDeploy + ECR) and hybrids before choosing. Grilling started 2026-09-14; open questions, gathered facts and the earlier (unadopted) GitHub-flavoured draft are in `NEXT_PHASE.md`. Platform-independent pieces: prod-ready `backend/Dockerfile` (no bind mount, `APP_ENV=prod`, arm64), a runtime definition on the VM with `DATABASE_URL` = Neon URI + `APP_SECRET`, migrations on deploy.
-4. **Vercel**: set `BACKEND_INTERNAL_URL=http://63.182.98.240:8000` on the `pinch` project once the app answers — the homepage's "unreachable" fallback goes away.
+3. **App deploy** — decided 2026-09-15, see *Backend deployment* below (GitHub Actions + GHCR + SSH).
+4. **Vercel**: `BACKEND_INTERNAL_URL=http://63.182.98.240:8000` — part of the *Backend deployment* definition of done.
 5. **TLS + domain** (deferred from this step on purpose): sslip.io + Caddy auto-TLS is flaky (Let's Encrypt rate limits on shared domains); a real domain (~$10/yr) + Route 53 zone ($0.50/mo credits) + FrankenPHP/Caddy auto-TLS is the clean path. Decide together with whether the same domain fronts Vercel.
 6. **Step 2 infra**: own VPC, SSM Session Manager (close port 22), IAM Identity Center; RDS only if credits allow and there's a learning reason.
 7. **Step 3 infra**: Fargate — after verifying ECS is on the Free plan.
 8. **Before ~2027-03-14**: decide upgrade-to-Paid (~$12/mo) vs. let the account close and rebuild on a fresh one; back up state first.
 
+## Backend deployment (decided 2026-09-15)
+
+Grilling session 2026-09-15 (the open Round 0 from `NEXT_PHASE.md`). This records the *why*; the workflow itself is `pinch-backend/.github/workflows/deploy.yml`, ops how-to in `WORKING_NOTES.md`.
+
+- **Platform: GitHub Actions end-to-end**, chosen over AWS-native (CodePipeline/CodeBuild) and a GitHub-builds/AWS-deploys hybrid (OIDC + SSM). All three cost ≈ $0 on the Free plan (CodePipeline V2 and CodeBuild have always-free tiers; ECR is cents), so cost didn't decide it. Actions won on simplicity: zero AWS resources, no IAM, no manual console click (CodeConnections needs an OAuth click-through; CodeDeploy is reportedly excluded from the Free plan). The IAM/OIDC/SSM lesson is explicitly parked for Step 2 infra, not dropped.
+- **Registry: GHCR**, public package `ghcr.io/maciej-jedral/pinch-backend`. Free for a public repo; the VM pulls anonymously. The first push creates the package *private* — a one-time manual visibility flip is part of setup. ECR rejected because it needs an instance IAM role just for pulls.
+- **Flow**: PR → `check` job only (php-cs-fixer, phpstan, phpunit against a `postgres:18-alpine` service). Push to `main` → `check` → `build` (arm64 image on GitHub's free `ubuntu-24.04-arm` runner, no QEMU) → `deploy`. Merging to `main` *is* releasing, same as the frontend. `workflow_dispatch` for manual re-runs; **rollback = re-run an older workflow run** (it re-deploys that exact sha, no rebuild).
+- **Prod image**: multi-stage `base → dev → prod` in the one `Dockerfile`. Root compose builds `target: dev`; prod = `composer install --no-dev`, `APP_ENV=prod` baked, cache warmed, no Composer binary. Separate `Dockerfile.prod` rejected (two files drift).
+- **Tagging**: every build pushes `sha-<short>` (immutable) and `latest` (convenience). The VM runs the pinned sha: the workflow writes `BACKEND_IMAGE_TAG=sha-…` into `/opt/pinch/.env` and `compose.prod.yml` uses `${BACKEND_IMAGE_TAG}`. `cat /opt/pinch/.env` = what's live.
+- **Runtime on the VM**: `compose.prod.yml` lives in `pinch-backend` and is `scp`'d to `/opt/pinch/` on every deploy — the VM is a dumb Docker host with no git checkout. Backend service only (DB is Neon): `restart: unless-stopped`, healthcheck on `/api/hello`, json-file logs capped 10 MB × 3, port 8000. Deploy = `pull` → `doctrine:migrations:migrate -n` (no-op until the first entity, but wired now) → `up -d --remove-orphans` → `image prune -f`.
+- **Secrets**: GitHub **`production` Environment** (not plain repo secrets — scoped to the deploy job, gives a Deployments panel, optional approval gate later). The workflow rewrites `/opt/pinch/.env` on each deploy: `APP_ENV=prod`, `APP_SECRET` (generated once, canonical copy in the user's password manager), `DATABASE_URL` = Neon **direct** URI (pooler rejected: one container in FrankenPHP classic mode opens short-lived connections; migrations want direct anyway; Doctrine keeps `sslmode=require` and drops the unknown `channel_binding` param), `CORS_ALLOW_ORIGIN=^https://pinch-frontend-eight\.vercel\.app$` (irrelevant while fetches are server-side, correct the day a browser calls the API), `DEFAULT_URI`. SSM Parameter Store rejected (needs the instance role).
+- **Deploy identity**: dedicated `pinch-deploy` ed25519 key; public half via Terraform variable `deploy_ssh_public_key` → cloud-init `ssh_authorized_keys` (this **replaced the instance** — done while the box was empty on purpose); private half is a `production` secret. Personal `pinch-aws` key never leaves the laptop. VM host key **pinned** in a `KNOWN_HOSTS` repo variable (no `ssh-keyscan`-at-deploy TOFU). Logs in as `ubuntu`; a separate deploy Linux user rejected — `docker` group is root-equivalent anyway.
+- **Terraform scope**: only the key variable + `/opt/pinch` dir in cloud-init. No IAM, no ECR, no SSM.
+- **Smoke test fix** (was tech debt): root compose no longer passes `env_file` to `backend` — Symfony's Dotenv already reads `/app/.env*` via the bind mount, and the injected `APP_ENV=dev` was overriding PHPUnit's forced `test`. `composer test` now runs `doctrine:database:create --env=test --if-not-exists` before PHPUnit, so `pinch_test` exists locally, on fresh installs and in CI with one definition (Postgres init-script rejected: doesn't run on existing volumes, and CI would need it a second way).
+- **First deploy** = the pipeline's first `main` run; no hand-deploy rehearsal.
+
+### Definition of done
+
+1. `curl http://63.182.98.240:8000/api/hello` → `{"database":"connected"}`.
+2. `BACKEND_INTERNAL_URL` set on Vercel; `https://pinch-frontend-eight.vercel.app` shows *connected*.
+3. Push to `pinch-backend/main` redeploys without manual steps; a PR runs checks only.
+4. `composer test` green locally and in CI.
+5. Rollback exercised once (re-run older run → older sha live → roll forward).
+6. Docs updated; `NEXT_PHASE.md` deleted.
+
 ## Known tech debt (not deferred decisions — things to revisit and fix)
 
-- **`pinch-backend` smoke test is red** (found 2026-09-14, pre-existing): `composer test` in the compose container fails because (1) `APP_ENV=dev` from compose's `env_file` overrides PHPUnit's forced `APP_ENV=test`, and (2) the test env's `dbname_suffix: '_test'` points at a `pinch_test` database that the compose Postgres never creates. Phase 1 claimed "one smoke test" — it doesn't currently pass. Fix planned as part of the deploy phase (see `NEXT_PHASE.md`, Q8).
+- ~~`pinch-backend` smoke test is red~~ — fixed 2026-09-15 in the deploy phase (see *Backend deployment* → smoke test fix).
 - **`pinch-frontend` uses two different bundlers**: local dev runs `next dev --webpack` (Turbopack's watcher doesn't reliably detect file changes across the Docker bind mount from the host), while the Vercel production build uses Turbopack (Next 16's default — no bind mount involved there, so it works fine). `next.config.ts` has both a `webpack()` override (dev watch polling only, no loaders/transforms) and an empty `turbopack: {}` to make the split explicit. Low risk today since the webpack config doesn't touch actual code transforms, but if a real webpack customization (loader, alias, etc.) is ever added, it must be mirrored into the `turbopack` config too or dev/prod will silently diverge. Revisit once Turbopack's dev-mode file watching over bind mounts improves, or once the project drops Docker-bind-mount dev entirely.
 
 ## Explicitly deferred to Phase 2 (do not silently assume answers to these)
@@ -119,13 +144,14 @@ Grilling session 2026-09-12; built and verified 2026-09-14. Code lives in `pinch
 - The real DDD layered architecture (`Domain/Application/Infrastructure/UI`) — Phase 1 uses a bare controller, no layering yet
 - ~~Backend deployment: AWS — Lightsail floated but not committed — Terraform for infra~~ → decided, see *Backend infrastructure*
 - ~~`pinch-terraform` repo creation~~ → done 2026-09-14
-- CI/CD pipelines: deploy workflows beyond Vercel's own, and lint/test workflows as merge gates (see Frontend deployment note above); backend deploy pipeline is *Next steps* item 3 under *Backend infrastructure*
+- CI/CD pipelines: ~~backend deploy~~ → decided, see *Backend deployment*. Still open: **frontend** lint/test workflow as a merge gate (see Frontend deployment note above)
 
 ## Rejected/superseded options (recorded so they aren't re-litigated without reason)
 
 - Single true monorepo (one repo, no submodules) — rejected in favor of meta-repo + submodules, since backend/frontend/terraform deploy and version independently
 - API Platform for the backend — rejected in favor of plain Symfony, since API Platform's "resource = entity" shortcut fights the planned DDD layering
 - pnpm + Turborepo — rejected; only one JS package exists (`pinch-frontend`), so plain npm is sufficient until a second JS package appears
+- AWS-native CI/CD (CodePipeline/CodeBuild/CodeDeploy + ECR) and the GitHub→AWS OIDC/SSM hybrid — not chosen for the backend deploy (2026-09-15); see *Backend deployment*. OIDC/SSM may return with Step 2 infra
 - Session-cookie auth — deferred alongside the rest of Phase 2's auth decision, JWT is the current leaning but not committed
 - Lightsail for the backend — rejected 2026-09-12: no upgrade path to EC2/VPC/Fargate, and on a Free-plan account it burns the same credits as EC2
 - Supabase, RDS, Postgres-on-the-VM — rejected in favour of Neon (see *Backend infrastructure*)
