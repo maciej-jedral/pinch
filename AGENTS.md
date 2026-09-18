@@ -1,7 +1,7 @@
 # Pinch — agent briefing
 
-Read this whole file before doing anything. It is the single source of truth for what exists, what was
-decided and what is open. Keep it current: update it at the end of every session that changes any of it.
+Read this whole file before doing anything. It is the single source of truth for what exists and what was
+decided. Keep it current: update it at the end of every session that changes any of it.
 It is written for AI agents, not for people; per-repo READMEs hold the human-facing docs and the ops how-to.
 
 ## What this is
@@ -23,7 +23,8 @@ homepage fetches `GET /api/hello`, which does a `SELECT 1` — that is the entir
 
 - **Grill, then confirm, then build.** For anything non-trivial run the grilling interview (numbered
   rounds with recommendations), get an explicit go-ahead, then implement. Record outcomes here.
-- **Respect deferrals.** "Later" / "Phase 2" means leave it out entirely. Put it under *Open items*.
+- **Respect deferrals.** "Later" / "Phase 2" means leave it out entirely. What's next is not tracked in
+  this repo — ask the user.
 - **Infra is frozen at Step 1** (one EC2 box, default VPC, port 22 key-only). Do not propose own VPC,
   SSM, Identity Center, RDS, Fargate or other infra deepening — decided, not deferred.
 - **Nothing runs on the host.** No php/composer/node/npm/terraform/aws binaries: `docker compose exec
@@ -43,15 +44,16 @@ homepage fetches `GET /api/hello`, which does a `SELECT 1` — that is the entir
 **Backend** — `pinch-backend/.github/workflows/deploy.yml`: PR → `check` (php-cs-fixer, phpstan level 8,
 PHPUnit vs Postgres 18); push to `main` → `check` → `build` (arm64 `prod` image → GHCR `sha-<sha>` +
 `latest`) → `deploy` (SSH as `ubuntu` to the box, write `/opt/pinch/{compose.yml,.env}`, `pull`,
-`doctrine:migrations:migrate`, `up -d`, smoke test). Rollback = re-run an older run. Secrets in the GitHub
-`production` environment. TLS terminates in the container: `SERVER_NAME="api.pinchapp.fyi, :8000"` gives
+`doctrine:migrations:migrate`, `up -d`, smoke test). Rollback = re-run an older run (code only — write expand/contract migrations). Secrets in the GitHub
+`production` environment. GHCR package is private; the deploy job uses the job token. TLS terminates in the container: `SERVER_NAME="api.pinchapp.fyi, :8000"` gives
 Caddy a Let's Encrypt cert on 80/443 (certs in the `caddy_data` volume) and an unpublished `:8000` for the
 healthcheck. Ops how-to: `backend/README.md` → *Operations*.
 
 **Frontend** — Vercel Hobby, GitHub integration (push to `main` → prod, PR → preview), functions pinned
 to `fra1`, domains `pinchapp.fyi` + `www` (redirect). Server-side fetch to `BACKEND_INTERNAL_URL=
 https://api.pinchapp.fyi` (env changes need a manual Redeploy). No CI workflow; Vercel's `next build`
-(typecheck) is the only gate. Dev bundler is webpack, prod is Turbopack — see *Open items*.
+(typecheck) is the only gate. Dev bundler is webpack, prod is Turbopack: `next.config.ts` has a `webpack()` override (watch
+polling only) and a load-bearing empty `turbopack: {}` — any real webpack customisation must be mirrored.
 
 **Infra** (`terraform/`, README is the how-to) — AWS **Free-plan** account (cannot bill; **auto-closes
 ~2027-03-14**; never upgrade it to Paid): `t4g.micro` Ubuntu 24.04 arm64 in the default VPC, Elastic IP
@@ -95,21 +97,3 @@ One line each — *decision · instead of · why*. Don't re-open these without a
 | Domain auto-renew off | card on file | user's choice; calendar reminder instead |
 | Infra stays at Step 1 | VPC/SSM/Fargate ladder | learning goals, not app prerequisites |
 | `next dev --webpack` locally | Turbopack dev | Turbopack's watcher doesn't see changes through the Docker bind mount (tested) |
-
-## Open items
-
-**Phase 2 — not decided, don't assume**: what Pinch actually does and whether it has accounts; auth
-mechanism (JWT leaning, not committed); DDD layering (`Domain/Application/Infrastructure/UI`) — Phase 1
-is a bare controller; frontend lint/test workflow as a merge gate.
-
-**Tech debt**: dev webpack vs prod Turbopack — `next.config.ts` has a `webpack()` override (watch polling
-only) and a load-bearing empty `turbopack: {}`; any real webpack customisation must be mirrored. GHCR
-package is private (deploy uses the job token) — flip public only if anonymous pulls are wanted. Rollback
-re-deploys old code against the current schema — write expand/contract migrations.
-
-**Dated**:
-- **~2027-02**: AWS account closes ~2027-03-14. Back up the S3 state, then on a fresh account:
-  `./tf -chdir=bootstrap apply` → `backend.hcl` → `./tf init -migrate-state` → `./tf apply` (new EIP;
-  the Porkbun `api` record follows it) → `BACKEND_HOST` + `KNOWN_HOSTS` in the GitHub `production`
-  environment → re-run the latest backend workflow. Neon and DNS are untouched.
-- **~2027-09-18**: domain expires; renew manually at Porkbun (emails at 60/30/7 days).
