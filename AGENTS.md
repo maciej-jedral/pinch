@@ -25,8 +25,6 @@ homepage fetches `GET /api/hello`, which does a `SELECT 1` — that is the entir
   rounds with recommendations), get an explicit go-ahead, then implement. Record outcomes here.
 - **Respect deferrals.** When the user says something is out of scope, leave it out entirely — no
   "small additions". Plans are not tracked in this repo; ask the user.
-- **Infra is final as it is** (one EC2 box, default VPC, port 22 key-only). Do not propose own VPC,
-  SSM, Identity Center, RDS, Fargate or other infra deepening — decided, not deferred.
 - **Nothing runs on the host.** No php/composer/node/npm/terraform/aws binaries: `docker compose exec
   backend composer …`, `docker compose exec frontend npm …`, `terraform/tf …`.
 - **Submodule change = three steps**: commit+push inside `backend/`/`frontend/`/`terraform/` → in `pinch`:
@@ -66,7 +64,7 @@ no card on file — expires ~2027-09-18**. Never edit DNS in the Porkbun dashboa
 
 ## Decision log
 
-One line each — *decision · instead of · why*. Don't re-open these without a new reason.
+Why the current setup is the way it is — one line each: *decision · instead of · why*.
 
 | Decision | Instead of | Why |
 |---|---|---|
@@ -80,7 +78,7 @@ One line each — *decision · instead of · why*. Don't re-open these without a
 | EC2 `t4g.micro`, Ubuntu 24.04 | Lightsail; Amazon Linux 2023 | Lightsail has no path to VPC/ECS; AL2023 lacks a Compose plugin package |
 | Neon free tier | RDS, Supabase, Postgres on the VM | data must outlive the Free-plan account; Supabase pauses idle projects |
 | Terraform in Docker, S3 state with `use_lockfile` | OpenTofu; DynamoDB lock | docs are Terraform-first; native S3 locking suffices |
-| Long-lived keys for IAM user `terraform` | Identity Center / OIDC | simplest thing that works; part of the rejected infra ladder |
+| Long-lived keys for IAM user `terraform` | Identity Center / OIDC | simplest thing that works for a single-user account |
 | SSH key generated on the laptop | `tls_private_key` in Terraform | private key would sit in state |
 | GitHub Actions end-to-end, `ubuntu-24.04-arm` runner | CodePipeline/CodeBuild; OIDC+SSM hybrid | zero AWS resources, no IAM, no console click-through |
 | GHCR | ECR | free for public repos; ECR needs an instance role to pull |
@@ -95,5 +93,4 @@ One line each — *decision · instead of · why*. Don't re-open these without a
 | Apex → Vercel, `api.` → EC2, same domain | separate free names | same-site cookies/CORS if a browser ever calls the API |
 | Hostname hardcoded in `deploy.yml` | GitHub variable | public, single environment, greppable |
 | Domain auto-renew off | card on file | user's choice; calendar reminder instead |
-| Single EC2 box in the default VPC, no further infra | VPC/SSM/Identity Center/Fargate ladder | learning goals, not app prerequisites |
 | `next dev --webpack` locally | Turbopack dev | Turbopack's watcher doesn't see changes through the Docker bind mount (tested) |
