@@ -57,6 +57,6 @@ When you need to rebuild:
 - **Dependencies changed** (`composer.json` / `package.json`): `docker compose build backend` or `docker compose build frontend`, then `docker compose up -d`. Dependencies live in named volumes (`backend_vendor`, `frontend_node_modules`), not in your checkout.
 - **Database schema changed** (new Doctrine migration): `docker compose exec backend bin/console doctrine:migrations:migrate`.
 
-## Plan
+## Decisions and state
 
-See [`ai_artifacts/ALIGNMENT.md`](ai_artifacts/ALIGNMENT.md) for the full project plan — what's decided, what's deliberately deferred to Phase 2 (app purpose, auth, API style), and why.
+[`AGENTS.md`](AGENTS.md) is the briefing every AI agent reads first: current state of each repo, a one-line-per-decision log with the rejected alternatives, and what's still open. It's written for agents, but it's also the shortest accurate summary of the project.
