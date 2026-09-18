@@ -4,8 +4,11 @@ Meta-repo for **Pinch** — Symfony backend, Next.js frontend, Postgres, all wir
 
 - [`pinch-backend`](https://github.com/maciej-jedral/pinch-backend) — Symfony 7.4 (PHP 8.4), via FrankenPHP
 - [`pinch-frontend`](https://github.com/maciej-jedral/pinch-frontend) — Next.js 16, TypeScript, Tailwind v4
+- [`pinch-terraform`](https://github.com/maciej-jedral/pinch-terraform) — the AWS/Neon/DNS infrastructure as Terraform
 
-This repo holds no application code of its own — just the submodule pointers to the two repos above, the Docker Compose setup, and the install script.
+**Live**: https://pinchapp.fyi (frontend on Vercel) → https://api.pinchapp.fyi (backend on EC2, TLS by Caddy).
+
+This repo holds no application code of its own — just the submodule pointers to the repos above, the Docker Compose setup, and the install script.
 
 ## Getting started
 
@@ -56,4 +59,4 @@ When you need to rebuild:
 
 ## Plan
 
-See [`ai_artifacts/ALIGNMENT.md`](ai_artifacts/ALIGNMENT.md) for the full project plan — what's decided, what's deliberately deferred to Phase 2 (domain, auth, API style, deployment/Terraform), and why.
+See [`ai_artifacts/ALIGNMENT.md`](ai_artifacts/ALIGNMENT.md) for the full project plan — what's decided, what's deliberately deferred to Phase 2 (app purpose, auth, API style), and why.

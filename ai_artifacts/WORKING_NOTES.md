@@ -2,22 +2,26 @@
 
 Environment facts and workflow gotchas learned in practice. Not decisions (those live in
 `ALIGNMENT.md`) — this is "how to actually get things done on this machine without tripping".
-Last updated 2026-09-15.
+Last updated 2026-09-18.
 
-## Current state (as of 2026-09-15)
+## Current state (as of 2026-09-18)
 
 - Phase 1 complete: `docker compose up` runs Postgres + Symfony (FrankenPHP) + Next.js locally,
   homepage fetches `/api/hello` end-to-end. `./install.sh` verified from a fresh clone.
-- Frontend is **live on Vercel** at `https://pinch-frontend-eight.vercel.app` (Hobby plan).
-  **Not** `pinch.vercel.app` — that's an unrelated third-party site; earlier notes had it wrong.
-  Push to `main` on `pinch-frontend` → auto production deploy. PRs get preview URLs. Functions pinned to `fra1`.
+- **Live URLs**: `https://pinchapp.fyi` (frontend, Vercel Hobby, `www` redirects) → `https://api.pinchapp.fyi`
+  (backend on the EC2 box, Caddy/Let's Encrypt). The old `pinch-frontend-eight.vercel.app` alias is gone
+  (`DEPLOYMENT_NOT_FOUND`); `pinch.vercel.app` was never ours. Push to `main` on `pinch-frontend` → auto
+  production deploy. PRs get preview URLs. Functions pinned to `fra1`.
 - Backend infra **Step 1 is live** (2026-09-14): EC2 `t4g.micro` at `63.182.98.240`, Neon Postgres,
   Budgets alert, S3 state. Decisions in `ALIGNMENT.md` → *Backend infrastructure*; how-to in `terraform/README.md`.
 - Backend **deploy pipeline is live** (2026-09-15): push to `pinch-backend/main` → GitHub Actions
   check → build (GHCR) → SSH deploy to the box. Decisions in `ALIGNMENT.md` → *Backend deployment*;
   ops how-to in the section below.
+- **TLS + domain live** (2026-09-18): domain at Porkbun, DNS records in Terraform, TLS in the backend
+  container. Decisions in `ALIGNMENT.md` → *TLS + domain*; ops in the section below.
 - Four repos. `terraform/` is a submodule with **no standalone clone** (deliberately — see below).
-- Next: TLS + domain (needs its own grilling), then Step 2 infra. See ALIGNMENT next steps.
+- Infra is **final at Step 1** (user decision 2026-09-18) — don't propose VPC/SSM/Fargate work.
+  Next: build the app (Phase 2 product decisions in ALIGNMENT are all still open).
 
 ## Two clones of each app repo exist on disk — this WILL bite you
 
@@ -86,11 +90,33 @@ then checks out old code.
 - The Claude Code auto-mode classifier **refuses to create public GitHub repos** (`gh repo create --public`).
   The user runs that one command via `! gh repo create …`; everything after (push, submodule add) is fine.
 
+## Domain / DNS / TLS ops (added 2026-09-18)
+
+- **Domain** `pinchapp.fyi` at Porkbun, **auto-renew off, no card on file** (user's choice). Expires ~2027-09-18;
+  Porkbun emails at 60/30/7 days. If it lapses, prod is down and the name is up for grabs — remind the user
+  in any session after ~2027-08.
+- **DNS** = `terraform/dns.tf` (provider `jianyuan/porkbun`, keys `PORKBUN_API_KEY`/`PORKBUN_SECRET_KEY` in
+  `terraform/.env`). Don't edit records in the Porkbun dashboard — `./tf plan` would fight it. Porkbun's
+  parking records (`ALIAS @`, `CNAME *` → `pixie.porkbun.com`) were deleted by API once; a re-registered
+  domain would need that again. Quick look: `dig +short api.pinchapp.fyi @curitiba.porkbun.com`.
+- **Vercel side** is manual: domains under *Settings → Domains* (apex `A 216.198.79.1`, `www` CNAME
+  `cname.vercel-dns.com`, www set to redirect). Vercel also offers "use our nameservers" — never accept,
+  it would take the `api` record away from Terraform.
+- **Cert**: Caddy inside the backend container, `/data` + `/config` in the `caddy_data`/`caddy_config`
+  volumes on the VM. Check: `echo | openssl s_client -connect api.pinchapp.fyi:443 -servername api.pinchapp.fyi | openssl x509 -noout -dates`.
+  Renewal is automatic (~30 days before expiry). After a Terraform instance replacement the volumes are gone
+  and Caddy re-issues on the first deploy — fine, unless you replace the instance >5 times in a week.
+- **Port 8000** is not published and not in the security group. The image's healthcheck still hits
+  `localhost:8000` inside the container (`SERVER_NAME="api.pinchapp.fyi, :8000"`).
+- Security-group rule descriptions can't contain `'` (AWS rejects "Let's Encrypt") — learned the hard way.
+- Home-router DNS caches NXDOMAIN for a while after a brand-new record; `dig @1.1.1.1` to see the truth.
+- Vercel env-var changes need a manual *Redeploy*; the running deployment keeps the old value.
+
 ## Backend deploy ops (added 2026-09-15)
 
 - **Where things are**: workflow `pinch-backend/.github/workflows/deploy.yml`; on the VM `/opt/pinch/{compose.yml,.env}`
   (both rewritten on every deploy — edits there don't survive). Image `ghcr.io/maciej-jedral/pinch-backend:sha-<full commit sha>`.
-- **What's live**: `ssh -i ~/.ssh/pinch-aws ubuntu@63.182.98.240 'grep BACKEND_IMAGE_TAG /opt/pinch/.env; docker compose -f /opt/pinch/compose.yml ps'`.
+- **What's live**: `curl https://api.pinchapp.fyi/api/hello`, or `ssh -i ~/.ssh/pinch-aws ubuntu@63.182.98.240 'grep BACKEND_IMAGE_TAG /opt/pinch/.env; docker compose -f /opt/pinch/compose.yml ps'`.
 - **Logs**: `… 'docker compose -f /opt/pinch/compose.yml logs --tail 100 -f'`.
 - **Redeploy / rollback**: `gh run list --repo maciej-jedral/pinch-backend`, then `gh run rerun <id> --repo …`
   (or Actions UI → *Re-run all jobs*). Re-running an older run deploys that commit's sha. Only `main` may
@@ -98,7 +124,7 @@ then checks out old code.
 - **Secrets/variables** (GitHub `production` environment, all set via `gh secret set … --env production`):
   `APP_SECRET`, `DATABASE_URL` (Neon direct URI, `postgres://…/neondb?sslmode=require` — Doctrine accepts the
   `postgres` scheme), `DEPLOY_SSH_KEY` (private half of `~/.ssh/pinch-deploy`); variables `BACKEND_HOST`,
-  `KNOWN_HOSTS` (`ssh-keyscan -t ed25519 63.182.98.240`). `CORS_ALLOW_ORIGIN` and `DEFAULT_URI` are hardcoded in the workflow.
+  `KNOWN_HOSTS` (`ssh-keyscan -t ed25519 63.182.98.240`). The public hostname (`DOMAIN`), `CORS_ALLOW_ORIGIN`, `DEFAULT_URI` and `SERVER_NAME` are hardcoded in the workflow.
   The canonical `APP_SECRET` copy is in the user's password manager; GitHub never shows it again.
 - **Rotate the deploy key**: `ssh-keygen -t ed25519 -f ~/.ssh/pinch-deploy` → new pub into `terraform.tfvars`
   → `./tf plan/apply` (replaces the instance, see AWS section) → `gh secret set DEPLOY_SSH_KEY --env production < ~/.ssh/pinch-deploy`
@@ -139,10 +165,10 @@ then checks out old code.
 
 ## Vercel
 
-- Vercel project ← GitHub `maciej-jedral/pinch-frontend`, root dir `./`, framework auto-detected. Domain
-  `pinch-frontend-eight.vercel.app`.
+- Vercel project ← GitHub `maciej-jedral/pinch-frontend`, root dir `./`, framework auto-detected.
 - `vercel.json` pins `regions: ["fra1"]`. No GitHub Actions. Deploy trigger is Vercel's GitHub App.
-- Env var `BACKEND_INTERNAL_URL=http://63.182.98.240:8000` (set 2026-09-15 by the user in the dashboard).
+- Env var `BACKEND_INTERNAL_URL=https://api.pinchapp.fyi` (changed 2026-09-18; needs a Redeploy to take effect).
+- Domains: `pinchapp.fyi` + `www.pinchapp.fyi` (redirect). The `*.vercel.app` alias no longer serves the app.
 - Anything needing the Vercel dashboard/OAuth must be done by the user; give them steps.
 
 ## User preferences observed

@@ -66,12 +66,12 @@ No Adminer/DB-UI service — everyone uses their own tooling (e.g. PhpStorm).
 
 `pinch-frontend` is deployed to Vercel's free **Hobby** plan. Backend deployment is covered by *Backend infrastructure* and *Backend deployment* below.
 
-**Status: live and verified 2026-09-12** at `https://pinch-frontend-eight.vercel.app` (corrected 2026-09-15 — earlier notes said `pinch.vercel.app`, which is an unrelated third-party site); a push to `main` was confirmed to auto-deploy. Environment/workflow gotchas are in `WORKING_NOTES.md` next to this file.
+**Status: live** — since 2026-09-18 at `https://pinchapp.fyi`; 2026-09-12 → 09-18 it was `https://pinch-frontend-eight.vercel.app` (never `pinch.vercel.app`, that's an unrelated third-party site). A push to `main` auto-deploys. Environment/workflow gotchas are in `WORKING_NOTES.md` next to this file.
 
 - **Scope**: frontend only. `page.tsx`'s existing try/catch already falls back to `"Hello from Next.js"` / database `"unreachable"` when `BACKEND_INTERNAL_URL` doesn't resolve (it won't, on Vercel) — this is expected, not a bug, until the backend has a public deployment.
 - **Mechanism**: Vercel's native GitHub integration (not GitHub Actions). Importing the repo once wires up: every push to `main` → production deploy, every PR → its own preview deployment. Zero pipeline config, no `vercel.json` needed — plain Next.js app, framework auto-detected.
-- **Vercel domain**: Vercel's generated `pinch-frontend-eight.vercel.app` (the `pinch` name was taken). Default `*.vercel.app` domain — no custom domain for now.
-- **Environment variables**: `BACKEND_INTERNAL_URL` is set as part of the backend deploy phase (see *Backend deployment*); until then the homepage shows the "unreachable" fallback.
+- **Vercel domain**: `pinchapp.fyi` + `www` (redirect) since 2026-09-18 — see *TLS + domain*. Was Vercel's generated `pinch-frontend-eight.vercel.app` until then; that alias is gone.
+- **Environment variables**: `BACKEND_INTERNAL_URL=https://api.pinchapp.fyi`. Changing it needs a redeploy (Vercel bakes env into the deployment).
 - **Function region**: `vercel.json` pins `fra1` (decided 2026-09-15) so the server-side fetch to the Frankfurt EC2 box doesn't cross the Atlantic.
 - **CI quality gate**: none added. Vercel's own `next build` (which typechecks) is the only gate on deploy; ESLint/Vitest are not run in CI. This stays consistent with the Phase 1 decision to defer GitHub Actions lint/test workflows to Phase 2 — not bolted on piecemeal here.
 - **Setup ownership**: connecting a GitHub repo to Vercel requires an interactive OAuth click-through in the browser (installing Vercel's GitHub App), which only the account owner can do — this was walked through manually, not automated.
@@ -80,11 +80,11 @@ No Adminer/DB-UI service — everyone uses their own tooling (e.g. PhpStorm).
 
 Grilling session 2026-09-12; built and verified 2026-09-14. Code lives in `pinch-terraform` (submodule `terraform/`); its `README.md` is the how-to. This section records the *why*.
 
-**Status: live.** `t4g.micro` at Elastic IP `63.182.98.240` (`http://63.182.98.240:8000` once the app is deployed), Neon project `small-bird-75248934` (PG 18.6, Frankfurt). Verified: SSH in, `docker compose version`, `hello-world`, and `psql` from the box to Neon returned `select 1`. **Nothing is deployed on the VM yet** — Docker is installed, that's all.
+**Status: live.** `t4g.micro` at Elastic IP `63.182.98.240` (`http://63.182.98.240:8000` once the app is deployed), Neon project `small-bird-75248934` (PG 18.6, Frankfurt). Verified: SSH in, `docker compose version`, `hello-world`, and `psql` from the box to Neon returned `select 1`. The app has been deployed by the pipeline since 2026-09-15 (see *Backend deployment*).
 
 - **Goal**: learn Terraform basics on a real AWS resource, at near-zero cost, in a way that *builds up* to EC2/VPC and later Fargate rather than being thrown away. This ruled out Lightsail (different resource family, no migration path) despite it being simplest.
 - **AWS account**: **new, Free plan** (created 2026-09-14). $100 credit + up to $100 earnable, 6-month window. AWS states the Free plan *cannot* charge the card; the account **auto-closes ~2027-03-14** or when credits hit zero, then 90 days grace, then permanent deletion. Never switch it to the Paid plan by accident — that's the only path to a bill. Expected burn ≈ $12/month (instance ~$7 + public IPv4 ~$3.65 + 8 GB gp3 ~$0.80) → ~$70 for the full 6 months.
-- **Compute: staged EC2**. Step 1 (done) = one `t4g.micro` (arm64, free-tier-eligible), Ubuntu 24.04 LTS, in the **default VPC**, security group 22+8000 in / all out, Elastic IP, cloud-init installs Docker + Compose from Docker's apt repo. Step 2 = own VPC/subnets/IGW, SSM Session Manager (drop port 22), IAM Identity Center, optionally RDS. Step 3 = ECS/Fargate task from the same image — **pending a check that ECS is on the Free plan's allowed-service list** (not verified yet).
+- **Compute: staged EC2**. Step 1 (done) = one `t4g.micro` (arm64, free-tier-eligible), Ubuntu 24.04 LTS, in the **default VPC**, security group 22+8000 in / all out, Elastic IP, cloud-init installs Docker + Compose from Docker's apt repo. Step 2 (own VPC/SSM/Identity Center) and Step 3 (Fargate) were the original learning ladder — **dropped 2026-09-18**, see *Infra scope* below.
 - **OS: Ubuntu 24.04 arm64** over Amazon Linux 2023 — AL2023 has no Compose plugin package (must curl the binary); Ubuntu gets `docker-ce` + `docker-compose-plugin` from Docker's official repo. Ubuntu 26.04 exists but was judged too fresh for Docker's repo.
 - **Database: Neon free tier**, Terraform-managed (`kislerdm/neon` provider, community but Neon-sponsored), region `aws-eu-central-1`, PG 18 (accepted by Neon's API). Chosen over Supabase (projects pause after 7 idle days; provider is alpha) and over RDS/Postgres-on-the-VM because the user wants **the data to outlive the Free-plan account**. Free tier: 0.5 GB, 100 CU-hours/month, scale-to-zero after 5 min (cold start ~0.5 s), 6 h PITR (`history_retention_seconds = 21600` — the provider default of 1 day is rejected on Free). Watch CU-hours the first month: a persistent Doctrine connection could keep the compute awake.
 - **Terraform tooling**: Terraform **1.16.2** via the `hashicorp/terraform` Docker image through `./tf` (nothing installed on the host, same rule as the app repos). Terraform over OpenTofu: BUSL is irrelevant to a personal learner and the docs/tutorials are Terraform-first. AWS provider `~> 6.64`, Neon `~> 0.18`, lock file committed.
@@ -101,10 +101,13 @@ Grilling session 2026-09-12; built and verified 2026-09-14. Code lives in `pinch
 2. ~~Delete the auto-created Neon project~~ — done 2026-09-14 via API; only `small-bird-75248934` remains.
 3. **App deploy** — decided 2026-09-15, see *Backend deployment* below (GitHub Actions + GHCR + SSH).
 4. **Vercel**: `BACKEND_INTERNAL_URL=http://63.182.98.240:8000` — part of the *Backend deployment* definition of done.
-5. **TLS + domain** (deferred from this step on purpose): sslip.io + Caddy auto-TLS is flaky (Let's Encrypt rate limits on shared domains); a real domain (~$10/yr) + Route 53 zone ($0.50/mo credits) + FrankenPHP/Caddy auto-TLS is the clean path. Decide together with whether the same domain fronts Vercel.
-6. **Step 2 infra**: own VPC, SSM Session Manager (close port 22), IAM Identity Center; RDS only if credits allow and there's a learning reason.
-7. **Step 3 infra**: Fargate — after verifying ECS is on the Free plan.
-8. **Before ~2027-03-14**: decide upgrade-to-Paid (~$12/mo) vs. let the account close and rebuild on a fresh one; back up state first.
+5. ~~**TLS + domain**~~ — decided and **live 2026-09-18**, see *TLS + domain* below.
+6. ~~Step 2 infra~~ / ~~Step 3 infra~~ — **dropped 2026-09-18**: the user chose to stop deepening the infra and build the app on Step 1 as-is (see *Infra scope*). Not deferred — dropped; re-open only with a new reason.
+7. **Before ~2027-03-14** (not skippable — the Free-plan account auto-closes): back up the S3 state, then rebuild on a fresh account: `tf apply` → new EIP → `BACKEND_HOST` + `KNOWN_HOSTS` in the GitHub `production` environment → re-run the workflow → the Porkbun `api` A record follows the EIP via Terraform. Calendar reminder for ~2027-02. Data (Neon) and DNS (Porkbun) live outside the account and are untouched.
+
+### Infra scope (decided 2026-09-18)
+
+Step 1 (one `t4g.micro` in the default VPC, port 22 key-only, Neon) **is the destination**, not a stage. Steps 2 (own VPC / SSM / Identity Center) and 3 (Fargate) were learning goals, not app prerequisites, and the user doesn't want to spend time on them now. Known consequences, accepted: port 22 open to the world (key-only); 1 GB RAM — a second service (worker, Redis, …) will need a bigger instance; a few seconds of downtime per deploy; **rollback re-deploys old code against the current schema** — write expand/contract migrations, never drop a column in the same release that stops using it.
 
 ## Backend deployment (decided 2026-09-15)
 
@@ -116,7 +119,7 @@ Grilling session 2026-09-15 (the open Round 0 from `NEXT_PHASE.md`). This record
 - **Prod image**: multi-stage `base → dev → prod` in the one `Dockerfile`. Root compose builds `target: dev`; prod = `composer install --no-dev`, `APP_ENV=prod` baked, cache warmed, no Composer binary. Separate `Dockerfile.prod` rejected (two files drift).
 - **Tagging**: every build pushes `sha-<short>` (immutable) and `latest` (convenience). The VM runs the pinned sha: the workflow writes `BACKEND_IMAGE_TAG=sha-…` into `/opt/pinch/.env` and `compose.prod.yml` uses `${BACKEND_IMAGE_TAG}`. `cat /opt/pinch/.env` = what's live.
 - **Runtime on the VM**: `compose.prod.yml` lives in `pinch-backend` and is `scp`'d to `/opt/pinch/` on every deploy — the VM is a dumb Docker host with no git checkout. Backend service only (DB is Neon): `restart: unless-stopped`, healthcheck on `/api/hello`, json-file logs capped 10 MB × 3, port 8000. Deploy = `pull` → `doctrine:migrations:migrate -n` (no-op until the first entity, but wired now) → `up -d --remove-orphans` → `image prune -f`.
-- **Secrets**: GitHub **`production` Environment** (not plain repo secrets — scoped to the deploy job, gives a Deployments panel, optional approval gate later). The workflow rewrites `/opt/pinch/.env` on each deploy: `APP_ENV=prod`, `APP_SECRET` (generated once, canonical copy in the user's password manager), `DATABASE_URL` = Neon **direct** URI (pooler rejected: one container in FrankenPHP classic mode opens short-lived connections; migrations want direct anyway; Doctrine keeps `sslmode=require` and drops the unknown `channel_binding` param), `CORS_ALLOW_ORIGIN=^https://pinch-frontend-eight\.vercel\.app$` (irrelevant while fetches are server-side, correct the day a browser calls the API), `DEFAULT_URI`. SSM Parameter Store rejected (needs the instance role).
+- **Secrets**: GitHub **`production` Environment** (not plain repo secrets — scoped to the deploy job, gives a Deployments panel, optional approval gate later). The workflow rewrites `/opt/pinch/.env` on each deploy: `APP_ENV=prod`, `APP_SECRET` (generated once, canonical copy in the user's password manager), `DATABASE_URL` = Neon **direct** URI (pooler rejected: one container in FrankenPHP classic mode opens short-lived connections; migrations want direct anyway; Doctrine keeps `sslmode=require` and drops the unknown `channel_binding` param), `CORS_ALLOW_ORIGIN` (now `^https://pinchapp\.fyi$`; irrelevant while fetches are server-side, correct the day a browser calls the API), `DEFAULT_URI`. SSM Parameter Store rejected (needs the instance role).
 - **Deploy identity**: dedicated `pinch-deploy` ed25519 key; public half via Terraform variable `deploy_ssh_public_key` → cloud-init `ssh_authorized_keys` (this **replaced the instance** — done while the box was empty on purpose); private half is a `production` secret. Personal `pinch-aws` key never leaves the laptop. VM host key **pinned** in a `KNOWN_HOSTS` repo variable (no `ssh-keyscan`-at-deploy TOFU). Logs in as `ubuntu`; a separate deploy Linux user rejected — `docker` group is root-equivalent anyway.
 - **Terraform scope**: only the key variable + `/opt/pinch` dir in cloud-init. No IAM, no ECR, no SSM.
 - **Smoke test fix** (was tech debt): root compose no longer passes `env_file` to `backend` — Symfony's Dotenv already reads `/app/.env*` via the bind mount, and the injected `APP_ENV=dev` was overriding PHPUnit's forced `test`. `composer test` now runs `doctrine:database:create --env=test --if-not-exists` before PHPUnit, so `pinch_test` exists locally, on fresh installs and in CI with one definition (Postgres init-script rejected: doesn't run on existing volumes, and CI would need it a second way).
@@ -130,6 +133,30 @@ Grilling session 2026-09-15 (the open Round 0 from `NEXT_PHASE.md`). This record
 4. `composer test` green locally and in CI.
 5. Rollback exercised once (re-run older run → older sha live → roll forward).
 6. Docs updated; `NEXT_PHASE.md` deleted.
+
+## TLS + domain (decided 2026-09-18)
+
+Grilling session 2026-09-18; built and verified the same day. Goal: HTTPS for the API (a blocker the moment a browser calls it directly — Phase 2 auth) and one domain for both halves so cookies/CORS are same-site later.
+
+**Status: live.** `https://pinchapp.fyi` (Vercel) shows *connected* via `https://api.pinchapp.fyi` (Let's Encrypt, auto-renewed by Caddy); `www` and `http://` redirect; `63.182.98.240:8000` is closed. `pinch-frontend-eight.vercel.app` no longer serves the app (Vercel returns `DEPLOYMENT_NOT_FOUND`) — the custom domain is the only frontend URL.
+
+- **Domain: `pinchapp.fyi`**, bought 2026-09-18 at **Porkbun** ($5.66/yr, registration = renewal price, no promo bump; Identity Digital registry). `pinch.fyi` was registry-premium ($16.90/yr renewal) — not worth 3× for the short name; every other `pinch.<tld>` on offer was a first-year promo renewing at $14–31. Bought *outside AWS* on purpose: Route 53 registration can't be paid with Free-plan credits, and anything in the AWS account dies with it in 2027-03. **Auto-renew OFF, no card on file** (user's choice) — Porkbun emails at 60/30/7 days; the user keeps a calendar reminder ~2 weeks before expiry. A lapsed domain takes prod down and can be re-registered by anyone, so that reminder matters.
+  - Price research: `.ovh` (~€3.50) is closed to new registrations; `pinch.eu`/`pinch.de` taken; `.top`/`.stream`/`.click` rejected on reputation or price. Free names (DuckDNS, is-a.dev, sslip.io) rejected: they're on the Public Suffix List, so app and API would still be cross-site, and the name wouldn't be ours.
+- **DNS: Porkbun nameservers, records in Terraform** via `jianyuan/porkbun` (v0.3.x, actively maintained; `cullenmcdermott/porkbun` is archived — don't use it). Keys from `PORKBUN_API_KEY`/`PORKBUN_SECRET_KEY` in the gitignored `terraform/.env`, same pattern as Neon. Porkbun needs *API Access* toggled per domain in its dashboard. Route 53 hosted zone rejected: it would die with the account and it's the infra learning the user opted out of.
+- **Layout**: `pinchapp.fyi` (apex) + `www.pinchapp.fyi` (Vercel 308 → apex) → Vercel; `api.pinchapp.fyi` → EC2 EIP (`A` record built from `aws_eip` output, so it follows an instance rebuild). Vercel's A/CNAME (and possible `_vercel` TXT) targets are copied from the Vercel dashboard when the domain is added, not assumed.
+- **TLS terminates in the existing FrankenPHP/Caddy** on the box — no extra proxy, no Cloudflare. `SERVER_NAME="api.pinchapp.fyi, :8000"` (deploy-written `.env`): Caddy auto-issues/renews via Let's Encrypt on the hostname and keeps a plain `:8000` listener *inside* the container for the image's `HEALTHCHECK`. Compose publishes only 80 + 443; security group becomes 22/80/443 — **port 8000 is closed to the world**, no raw-IP fallback. Certs in named volumes `caddy_data`/`caddy_config`; an instance replacement loses them and Caddy re-issues (LE limit 5 identical certs/week — fine). No ACME email (public repo), no HTTP/3 (would need UDP 443), no HSTS yet — revisit when a browser talks to the API.
+- **Pipeline**: hostname **hardcoded** in `deploy.yml` next to the existing `CORS_ALLOW_ORIGIN` (public info, one environment): `DEFAULT_URI=https://api.pinchapp.fyi`, `CORS_ALLOW_ORIGIN=^https://pinch\.fyi$`, environment URL and smoke test → `https://api.pinchapp.fyi/api/hello` (smoke test retries a few times — first deploy waits for cert issuance). `BACKEND_HOST` (IP) stays a variable for SSH.
+- **Vercel**: custom domains added by the user in the dashboard; `BACKEND_INTERNAL_URL=https://api.pinchapp.fyi`. Local dev untouched (`SERVER_NAME=:8000` default in the Dockerfile).
+- **Order followed**: user bought domain + API keys + added Vercel domains → Terraform (provider, 3 records, SG; `pinch-terraform#1`) → backend (`compose.prod.yml`, `deploy.yml`; `pinch-backend#2`) → merge deployed → Vercel redeploy for the new env var → docs.
+- **Vercel records**: apex `A 216.198.79.1`, `www CNAME cname.vercel-dns.com` (Vercel's universal target; it also offered handing over the nameservers — declined, the `api` record must stay with Porkbun/Terraform).
+
+### Definition of done — all met 2026-09-18
+
+1. ~~`curl https://api.pinchapp.fyi/api/hello` → `{"database":"connected"}` with a valid Let's Encrypt cert; `http://` redirects to `https://`.~~
+2. ~~`http://63.182.98.240:8000` no longer answers (SG closed).~~
+3. ~~`https://pinchapp.fyi` serves the frontend showing *connected*; `www.pinchapp.fyi` redirects.~~
+4. ~~`./tf plan` clean; DNS records visible in state.~~
+5. ~~Docs updated (this file, `WORKING_NOTES.md`, `terraform/README.md`, backend README).~~
 
 ## Known tech debt (not deferred decisions — things to revisit and fix)
 
@@ -158,4 +185,5 @@ Grilling session 2026-09-15 (the open Round 0 from `NEXT_PHASE.md`). This record
 - Amazon Linux 2023 — rejected in favour of Ubuntu 24.04 (no Compose plugin package)
 - OpenTofu — not chosen; Terraform proper, since tutorials/docs target it and the licence doesn't affect a personal learner
 - Terraform-generated SSH key (`tls_private_key`) — rejected; private key would live in state
+- Route 53 (registration or hosted zone), Cloudflare (registrar/proxy/DNS), free DNS names (DuckDNS, is-a.dev, sslip.io), a separate reverse-proxy container — all rejected 2026-09-18 for TLS + domain; see that section
 - `dunglas/symfony-docker` starter kit as the backend base — declined in favor of a minimal hand-rolled Dockerfile, to avoid pulling in pre-wired Xdebug/Dev Container tooling not currently wanted
