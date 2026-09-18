@@ -17,15 +17,15 @@ MIT repos under `github.com/maciej-jedral`, linked as git submodules of this met
 | `pinch-terraform` → `terraform/` | AWS EC2 + Neon Postgres + Porkbun DNS + budget, Terraform 1.16 via `./tf` (Docker) | — |
 
 Local dev: `./install.sh` → `docker compose up` (Postgres 18, backend on :8000, frontend on :3000). The
-homepage fetches `GET /api/hello`, which does a `SELECT 1` — that is the entire app so far.
+homepage fetches `GET /api/hello`, which does a `SELECT 1` — that is the entire app.
 
 ## Rules for agents
 
 - **Grill, then confirm, then build.** For anything non-trivial run the grilling interview (numbered
   rounds with recommendations), get an explicit go-ahead, then implement. Record outcomes here.
-- **Respect deferrals.** "Later" / "Phase 2" means leave it out entirely. What's next is not tracked in
-  this repo — ask the user.
-- **Infra is frozen at Step 1** (one EC2 box, default VPC, port 22 key-only). Do not propose own VPC,
+- **Respect deferrals.** When the user says something is out of scope, leave it out entirely — no
+  "small additions". Plans are not tracked in this repo; ask the user.
+- **Infra is final as it is** (one EC2 box, default VPC, port 22 key-only). Do not propose own VPC,
   SSM, Identity Center, RDS, Fargate or other infra deepening — decided, not deferred.
 - **Nothing runs on the host.** No php/composer/node/npm/terraform/aws binaries: `docker compose exec
   backend composer …`, `docker compose exec frontend npm …`, `terraform/tf …`.
@@ -80,7 +80,7 @@ One line each — *decision · instead of · why*. Don't re-open these without a
 | EC2 `t4g.micro`, Ubuntu 24.04 | Lightsail; Amazon Linux 2023 | Lightsail has no path to VPC/ECS; AL2023 lacks a Compose plugin package |
 | Neon free tier | RDS, Supabase, Postgres on the VM | data must outlive the Free-plan account; Supabase pauses idle projects |
 | Terraform in Docker, S3 state with `use_lockfile` | OpenTofu; DynamoDB lock | docs are Terraform-first; native S3 locking suffices |
-| Long-lived keys for IAM user `terraform` | Identity Center / OIDC | Step 2 learning that was later dropped |
+| Long-lived keys for IAM user `terraform` | Identity Center / OIDC | simplest thing that works; part of the rejected infra ladder |
 | SSH key generated on the laptop | `tls_private_key` in Terraform | private key would sit in state |
 | GitHub Actions end-to-end, `ubuntu-24.04-arm` runner | CodePipeline/CodeBuild; OIDC+SSM hybrid | zero AWS resources, no IAM, no console click-through |
 | GHCR | ECR | free for public repos; ECR needs an instance role to pull |
@@ -92,8 +92,8 @@ One line each — *decision · instead of · why*. Don't re-open these without a
 | DNS records in Terraform via `jianyuan/porkbun` | Route 53 zone; dashboard clicks | infra-as-code without an AWS dependency; `cullenmcdermott/porkbun` is archived |
 | TLS in the app container's Caddy | separate proxy; Cloudflare | the app already is a Caddy server; one moving part |
 | Port 8000 closed, 80/443 only | keep raw-IP fallback | one front door |
-| Apex → Vercel, `api.` → EC2, same domain | separate free names | same-site cookies/CORS for Phase 2 auth |
+| Apex → Vercel, `api.` → EC2, same domain | separate free names | same-site cookies/CORS if a browser ever calls the API |
 | Hostname hardcoded in `deploy.yml` | GitHub variable | public, single environment, greppable |
 | Domain auto-renew off | card on file | user's choice; calendar reminder instead |
-| Infra stays at Step 1 | VPC/SSM/Fargate ladder | learning goals, not app prerequisites |
+| Single EC2 box in the default VPC, no further infra | VPC/SSM/Identity Center/Fargate ladder | learning goals, not app prerequisites |
 | `next dev --webpack` locally | Turbopack dev | Turbopack's watcher doesn't see changes through the Docker bind mount (tested) |
