@@ -12,7 +12,7 @@ This repo holds no application code of its own — just the submodule pointers t
 
 ## Getting started
 
-You need only [Docker](https://docs.docker.com/get-docker/) installed. Then:
+You need [Docker](https://docs.docker.com/get-docker/) and `openssl` (for the one-time secret) on the host. Then:
 
 ```bash
 ./install.sh
@@ -54,7 +54,8 @@ docker compose exec frontend npm run format
 
 When you need to rebuild:
 
-- **Dependencies changed** (`composer.json` / `package.json`): `docker compose build backend` or `docker compose build frontend`, then `docker compose up -d`. Dependencies live in named volumes (`backend_vendor`, `frontend_node_modules`), not in your checkout.
+- **Dependencies changed** (`composer.json` / `package.json`): `docker compose exec backend composer install` or `docker compose exec frontend npm install`. Dependencies live in named volumes (`backend_vendor`, `frontend_node_modules`), not in your checkout — and a rebuilt image never overwrites an existing volume, so `docker compose build` alone won't pick them up.
+- **Dockerfile changed**: `docker compose build backend` or `docker compose build frontend`, then `docker compose up -d`.
 - **Database schema changed** (new Doctrine migration): `docker compose exec backend bin/console doctrine:migrations:migrate`.
 
 ## Decisions and state

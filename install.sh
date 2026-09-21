@@ -3,15 +3,24 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+for tool in docker openssl; do
+  if ! command -v "$tool" > /dev/null 2>&1; then
+    echo "==> '$tool' is required on the host but was not found" >&2
+    exit 1
+  fi
+done
+
 echo "==> Fetching backend/frontend submodules"
 git submodule update --init --recursive
 
-if [ ! -f backend/.env.local ]; then
-  echo "==> Generating backend/.env.local (APP_SECRET)"
+# .env.dev.local: Symfony loads .env.dev *after* .env.local, and the committed
+# backend/.env.dev sets its own APP_SECRET, so a plain .env.local would be overridden.
+if [ ! -f backend/.env.dev.local ]; then
+  echo "==> Generating backend/.env.dev.local (APP_SECRET)"
   app_secret=$(openssl rand -hex 16)
-  printf 'APP_SECRET=%s\n' "$app_secret" > backend/.env.local
+  printf 'APP_SECRET=%s\n' "$app_secret" > backend/.env.dev.local
 else
-  echo "==> backend/.env.local already exists, leaving it alone"
+  echo "==> backend/.env.dev.local already exists, leaving it alone"
 fi
 
 if [ ! -f frontend/.env.local ]; then
@@ -30,7 +39,7 @@ docker compose up -d
 echo "==> Waiting for the backend to become healthy"
 backend_ready=false
 for _ in $(seq 1 30); do
-  if curl -sf http://localhost:8000/api/hello > /dev/null 2>&1; then
+  if docker compose exec -T backend curl -sf http://localhost:8000/api/hello > /dev/null 2>&1; then
     backend_ready=true
     break
   fi
