@@ -17,7 +17,8 @@ MIT repos under `github.com/maciej-jedral`, linked as git submodules of this met
 | `pinch-terraform` → `terraform/` | AWS EC2 + Neon Postgres + Porkbun DNS + budget, Terraform 1.16 via `./tf` (Docker) | — |
 
 Local dev: `./install.sh` → `docker compose up` (Postgres 18, backend on :8000, frontend on :3000). The
-homepage fetches `GET /api/hello`, which does a `SELECT 1` — that is the entire app.
+homepage fetches `GET /api/hello`, which does a `SELECT 1`; `GET /api/health` is a DB-free liveness probe
+(`{"status":"ok"}`, safe to poll). That is the entire app. Routes carry `#[Route('/api')]` at class level.
 
 ## Rules for agents
 
@@ -42,10 +43,11 @@ homepage fetches `GET /api/hello`, which does a `SELECT 1` — that is the entir
 **Backend** — `pinch-backend/.github/workflows/deploy.yml`: PR → `check` (php-cs-fixer, phpstan level 8,
 PHPUnit vs Postgres 18); push to `main` → `check` → `build` (arm64 `prod` image → GHCR `sha-<sha>` +
 `latest`) → `deploy` (SSH as `ubuntu` to the box, write `/opt/pinch/{compose.yml,.env}`, `pull`,
-`doctrine:migrations:migrate`, `up -d`, smoke test). Rollback = re-run an older run (code only — write expand/contract migrations). Secrets in the GitHub
-`production` environment. GHCR package is private; the deploy job uses the job token. TLS terminates in the container: `SERVER_NAME="api.pinchapp.fyi, :8000"` gives
-Caddy a Let's Encrypt cert on 80/443 (certs in the `caddy_data` volume) and an unpublished `:8000` for the
-healthcheck. Ops how-to: `backend/README.md` → *Operations*.
+`doctrine:migrations:migrate`, `up -d`, smoke test). Rollback = re-run an older run's `deploy` job only (re-running all jobs rebuilds from the unpinned base and overwrites the `sha-` tag; code only — write expand/contract migrations). Secrets in the GitHub
+`production` environment. GHCR package is private; the deploy job uses the job token. TLS terminates in the container: `SERVER_NAME=api.pinchapp.fyi` gives
+Caddy a Let's Encrypt cert on 80/443 (certs in the `caddy_data` volume). No container healthcheck: a periodic
+`/api/hello` (`SELECT 1`) would keep the Neon free-tier compute (100 CU-hours/month) from scaling to zero;
+the deploy smoke test is the gate. Ops how-to: `backend/README.md` → *Operations*.
 
 **Frontend** — Vercel Hobby, GitHub integration (push to `main` → prod, PR → preview), functions pinned
 to `fra1`, domains `pinchapp.fyi` + `www` (redirect). Server-side fetch to `BACKEND_INTERNAL_URL=
@@ -90,6 +92,7 @@ Why the current setup is the way it is — one line each: *decision · instead o
 | DNS records in Terraform via `jianyuan/porkbun` | Route 53 zone; dashboard clicks | infra-as-code without an AWS dependency; `cullenmcdermott/porkbun` is archived |
 | TLS in the app container's Caddy | separate proxy; Cloudflare | the app already is a Caddy server; one moving part |
 | Port 8000 closed, 80/443 only | keep raw-IP fallback | one front door |
+| No container `HEALTHCHECK` | `curl /api/hello` every 30s | it ran `SELECT 1` around the clock, so Neon's free compute never scaled to zero and would exhaust its 100 CU-hours mid-month; the deploy smoke test gates instead |
 | Apex → Vercel, `api.` → EC2, same domain | separate free names | same-site cookies/CORS if a browser ever calls the API |
 | Hostname hardcoded in `deploy.yml` | GitHub variable | public, single environment, greppable |
 | Domain auto-renew off | card on file | user's choice; calendar reminder instead |
