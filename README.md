@@ -31,7 +31,7 @@ After the first `./install.sh`, you don't need it again — the images are built
 docker compose up -d        # start Postgres, backend and frontend
 docker compose logs -f      # follow logs (add a service name to filter, e.g. `logs -f backend`)
 docker compose down         # stop; the database keeps its data in a named volume
-docker compose down -v      # stop AND wipe the database / vendor / node_modules volumes
+docker compose down -v      # stop AND wipe the database volume
 ```
 
 Same URLs as above: frontend on http://localhost:3000, backend on http://localhost:8000/api/hello. Source directories are bind-mounted into the containers, so edits are picked up live — the frontend hot-reloads (via webpack polling), the backend re-reads PHP on each request.
@@ -54,7 +54,7 @@ docker compose exec frontend npm run format
 
 When you need to rebuild:
 
-- **Dependencies changed** (`composer.json` / `package.json`): `docker compose exec backend composer install` or `docker compose exec frontend npm install`. Dependencies live in named volumes (`backend_vendor`, `frontend_node_modules`), not in your checkout — and a rebuilt image never overwrites an existing volume, so `docker compose build` alone won't pick them up.
+- **Dependencies changed** (`composer.json` / `package.json`): `docker compose exec backend composer install` or `docker compose exec frontend npm install`. Dependencies live in your checkout (`backend/vendor`, `frontend/node_modules`, both git-ignored), written there by the containers — so your IDE indexes exactly what runs. Never run Composer/npm on the host against them.
 - **Dockerfile changed**: `docker compose build backend` or `docker compose build frontend`, then `docker compose up -d`.
 - **Database schema changed** (new Doctrine migration): `docker compose exec backend bin/console doctrine:migrations:migrate`.
 

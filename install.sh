@@ -33,6 +33,14 @@ fi
 echo "==> Building images"
 docker compose build
 
+# Dependencies are installed into the bind-mounted checkout (backend/vendor,
+# frontend/node_modules) so the IDE on the host sees exactly what the containers run.
+echo "==> Installing backend dependencies (composer install)"
+docker compose run --rm --no-deps backend composer install --no-interaction
+
+echo "==> Installing frontend dependencies (npm ci)"
+docker compose run --rm --no-deps frontend npm ci
+
 echo "==> Starting the stack"
 docker compose up -d
 

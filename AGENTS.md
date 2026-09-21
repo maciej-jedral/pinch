@@ -97,3 +97,4 @@ Why the current setup is the way it is — one line each: *decision · instead o
 | Hostname hardcoded in `deploy.yml` | GitHub variable | public, single environment, greppable |
 | Domain auto-renew off | card on file | user's choice; calendar reminder instead |
 | `next dev --webpack` locally | Turbopack dev | Turbopack's watcher doesn't see changes through the Docker bind mount (tested) |
+| `vendor/`, `node_modules/` in the bind mount, installed by `install.sh` via `docker compose run` | named volumes seeded from the image | one copy that both the container and the host IDE see; a rebuilt image never refreshed an existing volume |
